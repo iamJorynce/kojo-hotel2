@@ -3,10 +3,14 @@
 @section('content')
 
 <div class="topbar">
-    <h2>Checked-In Guests</h2>
+    <h2>🔴 Check-Out Guests</h2>
 </div>
 
-@if(empty($bookings))
+@if(session('success'))
+    <div class="alert-success">{{ session('success') }}</div>
+@endif
+
+@if(empty($bookings) || count($bookings) === 0)
     <p>No checked-in guests.</p>
 @else
 
@@ -14,51 +18,38 @@
 
 @foreach($bookings as $b)
 
-@php
-$status = $b['status'] ?? 'pending';
-$payment = $b['payment_status'] ?? 'unpaid';
-@endphp
-
-
 <div class="card" style="border-left:5px solid #3b82f6;">
 
-@if($b['status'] === 'checked_in')
-
-    <a href="/admin/bookings/checkout/{{ $b['id'] }}"
-       class="btn btn-danger"
-       onclick="return confirm('Check-out guest?')">
-        🔴 Check-out
-    </a>
-
-@endif
-
-@if($status === 'checked_out')
-    <span style="background:#ef4444;color:#fff;padding:5px 10px;border-radius:6px;">
-        🔴 Checked Out
-    </span>
-@endif
-
-    <h3>{{ $b['full_name'] }}</h3>
-    <p><b>Phone:</b> {{ $b['phone'] }}</p>
-    <p><b>Email:</b> {{ $b['email'] }}</p>
-    <p><b>Room:</b> {{ $b['room_name'] }} (Room Number: {{ $b['room_number'] ?? '' }})</p>
-    <p><b>Check In:</b> {{ $b['check_in'] }}</p>
-    <p><b>Check Out:</b> {{ $b['check_out'] }}</p>
-    <p><b>Room Price per night:</b> {{ $b['room_price'] }}</p>
-    <p><b>Paid Amount:</b> {{ $b['paid_amount'] }}</p>
+    <h3>{{ $b['full_name'] ?? 'No Name' }}</h3>
+    <p><b>Phone:</b> {{ $b['phone'] ?? '-' }}</p>
+    <p><b>Email:</b> {{ $b['email'] ?? '-' }}</p>
+    <p><b>Room:</b> {{ $b['room_name'] ?? '-' }} (Room No: {{ $b['room_number'] ?? 'N/A' }})</p>
+    <p><b>Check-in:</b> {{ $b['check_in'] }}</p>
+    <p><b>Check-out:</b> {{ $b['check_out'] }}</p>
+    <p><b>Price/night:</b> ₱{{ number_format($b['room_price'] ?? 0, 2) }}</p>
+    <p><b>Paid Amount:</b> ₱{{ number_format($b['paid_amount'] ?? 0, 2) }}</p>
 
     <p>
         <b>Status:</b>
-         🔵 Checked In
+        <span style="background:#3b82f6;color:white;padding:4px 10px;border-radius:6px;">
+            🔵 Checked In
+        </span>
     </p>
 
-</div>
+    <hr>
 
+    {{-- FIX: removed dead checked_out badge — this page only shows checked_in guests --}}
+    <a href="/admin/bookings/checkout/{{ $b['id'] }}"
+       class="btn btn-danger"
+       onclick="return confirm('Check out this guest?')">
+        🔴 Check-out Guest
+    </a>
+
+</div>
 
 @endforeach
 
 </div>
-
 @endif
 
 @endsection

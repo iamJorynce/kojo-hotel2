@@ -5,202 +5,199 @@
 <div class="card">
     <h2>➕ Walk-in Booking</h2>
 
+    @if(session('error'))
+        <div class="alert-error">{{ session('error') }}</div>
+    @endif
+
     <form method="POST" action="/admin/bookings/create">
         @csrf
 
         {{-- GUEST INFO --}}
-        <input type="text" name="full_name" value="{{ old('full_name') }}" placeholder="Guest Name" required>
-        <input type="text" name="phone" value="{{ old('phone') }}" placeholder="Phone number" required>
-        <input type="email" name="email" value="{{ old('email') }}" placeholder="Email">
+        <label>Guest Name</label>
+        <input type="text" name="full_name" value="{{ old('full_name') }}" placeholder="Full Name" required>
+
+        <label>Phone Number</label>
+        <input type="text" name="phone" value="{{ old('phone') }}" placeholder="Phone" required>
+
+        <label>Email</label>
+        <input type="email" name="email" value="{{ old('email') }}" placeholder="Email (optional)">
 
         {{-- ROOM SELECT --}}
+        <label>Select Room</label>
         <select name="room_id" id="roomSelect" required>
             <option value="">-- Select Room --</option>
-
             @foreach($rooms as $room)
-
                 @php
-                    $category = collect($categories)
-                        ->firstWhere('id', $room['category_id']);
+                    $category = collect($categories)->firstWhere('id', $room['category_id']);
                 @endphp
-
-                <option 
+                <option
                     value="{{ $room['uuid_id'] }}"
                     data-price="{{ $category['price'] ?? 0 }}"
-                    {{ old('room_id') == $room['uuid_id'] ? 'selected' : '' }}
-                >
-                    {{ $room['name'] }} (₱{{ $category['price'] ?? 0 }})
+                    {{ old('room_id') == $room['uuid_id'] ? 'selected' : '' }}>
+                    Room {{ $room['room_number'] }} — {{ $room['name'] }} (₱{{ number_format($category['price'] ?? 0, 2) }})
                 </option>
-
             @endforeach
         </select>
 
         {{-- DATES --}}
+        <label>Check-in Date</label>
         <input type="date" name="check_in" id="check_in" required>
+
+        <label>Check-out Date</label>
         <input type="date" name="check_out" id="check_out" required>
 
-        {{-- 💥 BOOKING CALCULATOR --}}
-        <div style="
-            background:#0f172a;
-            color:white;
-            padding:15px;
-            border-radius:12px;
-            margin-top:15px;">
-
-            <h3>🧮 Booking Calculator</h3>
-
-            <input type="text" id="price" readonly placeholder="Price per Night">
-            <input type="text" id="nights" readonly placeholder="Nights">
-            <input type="text" id="total" readonly placeholder="Total Amount">
-            <input type="text" id="dp" readonly placeholder="Downpayment (50%)">
-            <input type="text" id="balance" readonly placeholder="Balance">
-
+        {{-- DATE ERROR --}}
+        <div id="date-error"
+             style="display:none;background:#fee2e2;color:#991b1b;padding:10px;border-radius:6px;margin-bottom:10px;">
+            ⚠️ Check-out must be after check-in.
         </div>
 
-        {{-- 💳 CASHIER BIG SUMMARY --}}
-        <div style="
-            margin-top:20px;
-            background:#111827;
-            color:white;
-            padding:20px;
-            border-radius:12px;
-        ">
-<label>Payment Type</label>
+        {{-- BOOKING CALCULATOR --}}
+        <div style="background:#0f172a;color:white;padding:15px;border-radius:12px;margin-top:10px;">
+            <h3 style="margin-bottom:12px;">🧮 Booking Calculator</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                <div>
+                    <label style="color:#94a3b8;">Price per Night</label>
+                    <input type="text" id="price" readonly
+                           style="background:#1e293b;color:white;border-color:#334155;">
+                </div>
+                <div>
+                    <label style="color:#94a3b8;">No. of Nights</label>
+                    <input type="text" id="nights" readonly
+                           style="background:#1e293b;color:white;border-color:#334155;">
+                </div>
+                <div>
+                    <label style="color:#94a3b8;">Total Amount</label>
+                    <input type="text" id="total" readonly
+                           style="background:#1e293b;color:white;border-color:#334155;">
+                </div>
+                <div>
+                    <label style="color:#94a3b8;">Downpayment (50%)</label>
+                    <input type="text" id="dp" readonly
+                           style="background:#1e293b;color:white;border-color:#334155;">
+                </div>
+            </div>
+        </div>
 
-<select name="payment_type" id="payment_type" required>
-    <option value="full">Full Payment</option>
-    <option value="partial">Partial Payment</option>
-</select>
+        {{-- CASHIER SUMMARY --}}
+        <div style="background:#111827;color:white;padding:20px;border-radius:12px;margin-top:15px;">
+            <h3 style="margin-bottom:15px;">💳 Cashier Summary</h3>
 
-            <h3>💳 Cashier Summary</h3>
+            <label style="color:#94a3b8;">Payment Type</label>
+            <select name="payment_type" id="payment_type" required
+                    style="background:#1e293b;color:white;border-color:#334155;">
+                <option value="full">Full Payment</option>
+                <option value="partial">Partial Payment</option>
+            </select>
 
-            <div style="
-                display:grid;
-                grid-template-columns:1fr 1fr 1fr;
-                gap:15px;
-                text-align:center;
-            ">
-            
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:15px;text-align:center;margin-top:10px;">
 
-                {{-- TOTAL --}}
                 <div style="background:#1f2937;padding:15px;border-radius:10px;">
-                    <small>Total Amount</small>
-                    <h2 id="total_amount_display">0.00</h2>
+                    <small style="color:#94a3b8;">Total Amount</small>
+                    <h2 id="total_amount_display" style="margin:5px 0;">0.00</h2>
                 </div>
 
-                {{-- CASH --}}
                 <div style="background:#1f2937;padding:15px;border-radius:10px;">
-                    <small>Cash Received</small>
-                    <input type="number" id="cash_received"
-                           name="cash_received"
+                    <small style="color:#94a3b8;">Cash Received</small>
+                    <input type="number" id="cash_received" name="cash_received"
                            value="{{ old('cash_received') }}"
-                           style="
-                                width:100%;
-                                padding:8px;
-                                margin-top:8px;
-                                text-align:center;
-                                font-size:18px;
-                                border-radius:6px;
-                           "
+                           min="0" step="0.01"
+                           style="width:100%;padding:8px;margin-top:8px;text-align:center;font-size:18px;border-radius:6px;background:#374151;color:white;border:1px solid #4b5563;"
                            required>
                 </div>
 
-                {{-- CHANGE --}}
                 <div style="background:#1f2937;padding:15px;border-radius:10px;">
-                    <small>Change</small>
-                    <h2 id="change_display" style="color:#22c55e;">0.00</h2>
+                    <small style="color:#94a3b8;">Change</small>
+                    <h2 id="change_display" style="color:#22c55e;margin:5px 0;">0.00</h2>
                 </div>
 
             </div>
-
         </div>
 
-        <button type="submit" style="margin-top:15px;">
-            Create Booking
+        <button type="submit" class="btn btn-success"
+                style="width:100%;margin-top:20px;padding:12px;font-size:15px;">
+            ✅ Create Booking
         </button>
 
     </form>
 </div>
 
-{{-- DATE VALIDATION --}}
 <script>
-document.addEventListener("DOMContentLoaded", function () {
+document.addEventListener('DOMContentLoaded', function () {
 
-    let today = new Date().toISOString().split('T')[0];
+    const today    = new Date().toISOString().split('T')[0];
+    const checkIn  = document.getElementById('check_in');
+    const checkOut = document.getElementById('check_out');
 
-    document.getElementById("check_in").min = today;
-    document.getElementById("check_out").min = today;
+    checkIn.min  = today;
+    checkOut.min = today;
 
-    document.getElementById("check_in").addEventListener("change", function () {
-        document.getElementById("check_out").min = this.value;
+    checkIn.addEventListener('change', function () {
+        checkOut.min = this.value;
+        // FIX: clear invalid checkout
+        if (checkOut.value && checkOut.value <= this.value) {
+            checkOut.value = '';
+        }
+        calculate();
     });
 
-});
-</script>
+    checkOut.addEventListener('change', function () {
+        if (this.value && checkIn.value && this.value <= checkIn.value) {
+            document.getElementById('date-error').style.display = 'block';
+            this.value = '';
+        } else {
+            document.getElementById('date-error').style.display = 'none';
+            calculate();
+        }
+    });
 
-{{-- CALCULATOR + CASHIER LOGIC --}}
-<script>
-document.addEventListener("DOMContentLoaded", function () {
-
-    const roomSelect = document.getElementById("roomSelect");
-    const checkIn = document.getElementById("check_in");
-    const checkOut = document.getElementById("check_out");
-
-    const price = document.getElementById("price");
-    const nights = document.getElementById("nights");
-    const total = document.getElementById("total");
-    const dp = document.getElementById("dp");
-    const balance = document.getElementById("balance");
-
-    const cash = document.getElementById("cash_received");
+    const roomSelect = document.getElementById('roomSelect');
+    const priceEl    = document.getElementById('price');
+    const nightsEl   = document.getElementById('nights');
+    const totalEl    = document.getElementById('total');
+    const dpEl       = document.getElementById('dp');
+    const cash       = document.getElementById('cash_received');
 
     let roomPrice = 0;
 
     function calculate() {
+        if (!checkIn.value || !checkOut.value || roomPrice <= 0) return;
 
-        if (!checkIn.value || !checkOut.value) return;
-
-        let diff = new Date(checkOut.value) - new Date(checkIn.value);
-        let nightsCount = diff / (1000 * 60 * 60 * 24);
+        const diff        = new Date(checkOut.value) - new Date(checkIn.value);
+        const nightsCount = diff / (1000 * 60 * 60 * 24);
 
         if (nightsCount <= 0) return;
 
-        let totalAmount = nightsCount * roomPrice;
-        let downpayment = totalAmount * 0.5;
+        const totalAmount = nightsCount * roomPrice;
+        const downpayment = totalAmount * 0.5;
 
-        price.value = roomPrice;
-        nights.value = nightsCount;
-        total.value = totalAmount.toFixed(2);
-        dp.value = downpayment.toFixed(2);
-        balance.value = (totalAmount - downpayment).toFixed(2);
+        priceEl.value  = roomPrice.toFixed(2);
+        nightsEl.value = nightsCount;
+        totalEl.value  = totalAmount.toFixed(2);
+        dpEl.value     = downpayment.toFixed(2);
 
-        // sync cashier display
-        document.getElementById("total_amount_display").innerText = totalAmount.toFixed(2);
+        document.getElementById('total_amount_display').innerText = totalAmount.toFixed(2);
     }
 
-    roomSelect.addEventListener("change", function () {
-        let selected = this.options[this.selectedIndex];
-        roomPrice = Number(selected.dataset.price);
+    roomSelect.addEventListener('change', function () {
+        const selected = this.options[this.selectedIndex];
+        roomPrice = Number(selected.dataset.price || 0);
 
-if (!roomPrice || roomPrice <= 0) {
-    alert("Invalid room price selected");
-    return;
-}
+        if (!roomPrice || roomPrice <= 0) {
+            alert('Invalid room price. Please select a valid room.');
+            this.value = '';
+            return;
+        }
         calculate();
     });
 
-    checkIn.addEventListener("change", calculate);
-    checkOut.addEventListener("change", calculate);
+    cash.addEventListener('input', function () {
+        const totalVal = Number(totalEl.value || 0);
+        const cashVal  = Number(this.value     || 0);
+        const change   = cashVal - totalVal;
 
-    cash.addEventListener("input", function () {
-
-        let totalVal = Number(total.value || 0);
-        let cashVal = Number(cash.value || 0);
-
-        let change = cashVal - totalVal;
-
-        document.getElementById("change_display").innerText =
-            change >= 0 ? change.toFixed(2) : "0.00";
+        document.getElementById('change_display').innerText =
+            change >= 0 ? change.toFixed(2) : '0.00';
     });
 
 });

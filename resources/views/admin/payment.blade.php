@@ -2,129 +2,85 @@
 
 @section('content')
 
-<div class="container" style="max-width:600px;margin:auto;padding:20px;">
+<div style="max-width:600px;margin:auto;padding:20px;">
 
     <h2>💳 Payment Panel</h2>
 
-    <div style="background:#f8f8f8;padding:15px;border-radius:10px;margin-bottom:15px;">
+    <div style="background:#f8f8f8;padding:15px;border-radius:10px;margin-bottom:20px;">
         <p><b>Guest:</b> {{ $booking['full_name'] }}</p>
-
         <p><b>Room:</b> {{ $booking['room_name'] }}</p>
-
-        <p><b>Total Amount:</b> ₱{{ $booking['total_amount'] }}</p>
-
-        <p><b>Paid:</b> ₱{{ $booking['paid_amount'] ?? 0 }}</p>
-
-        <p><b>Balance:</b> ₱{{ $booking['balance_amount'] }}</p>
+        <p><b>Total Amount:</b> ₱{{ number_format($booking['total_amount'], 2) }}</p>
+        <p><b>Paid:</b> ₱{{ number_format($booking['paid_amount'] ?? 0, 2) }}</p>
+        <p><b>Balance:</b> ₱{{ number_format($booking['balance_amount'], 2) }}</p>
     </div>
 
+    {{-- FIX: removed broken/duplicate closing </div> tags that were outside the form --}}
     <form method="POST" action="/admin/bookings/payment/{{ $booking['id'] }}">
         @csrf
-    
+
         <label>Payment Type</label>
-        <select name="payment_type">
+        <select name="payment_type" id="payment_type">
             <option value="full">Full Payment</option>
             <option value="partial">Partial Payment</option>
         </select>
 
-        <br><br>
-
         <label>Cash Received</label>
-        <input type="number" name="cash_received" id="cash_received">
+        <input type="number" name="cash_received" id="cash_received" min="0" step="0.01" required>
 
-        <br><br>
+        <div style="display:flex;gap:10px;margin-top:5px;">
+            <div style="flex:1;">
+                <label>Change</label>
+                <input type="number" id="change" readonly>
+            </div>
+            <div style="flex:1;">
+                <label>Remaining Balance</label>
+                <input type="number" id="balance"
+                       value="{{ $booking['balance_amount'] }}"
+                       readonly>
+            </div>
+        </div>
 
-        <div style="display:flex;gap:10px;">
-    <div style="flex:1;">
-        <label>Change</label>
-        <input type="number" id="change" readonly>
-    </div>
-
-    <div style="flex:1;">
-        <label>Balance</label>
-        <input type="number" id="balance" value="{{ $booking['balance_amount'] }}" readonly>
-    </div>
-</div>  {{-- ✅ close the flex container here --}}
-
-<br>
-
-<button type="submit" class="pay-btn">
-    Select for Payment
-</button>
-</div>
-</div>
+        <button type="submit" class="btn btn-success"
+                style="width:100%;margin-top:20px;padding:12px;font-size:15px;">
+            ✅ Confirm Payment
+        </button>
 
     </form>
 
 </div>
+
 <script>
-function setBookingAmount(total, balance) {
+document.addEventListener('DOMContentLoaded', function () {
 
-    console.log("CLICKED:", total, balance);
+    const cash        = document.getElementById('cash_received');
+    const balanceEl   = document.getElementById('balance');
+    const changeEl    = document.getElementById('change');
+    const paymentType = document.getElementById('payment_type');
 
-    document.getElementById("balance").value = balance;
-    document.getElementById("cash_received").value = "";
-    document.getElementById("change").value = 0;
-}
+    // FIX: store original DB balance as source of truth — never mutate this
+    const dbBalance = Number(balanceEl.value || 0);
 
-document.getElementById("cash_received").addEventListener("input", function () {
-
-    let cash = Number(this.value || 0);
-    let balance = Number(document.getElementById("balance").value || 0);
-
-    let remaining = balance - cash;
-
-    document.getElementById("balance").value =
-        remaining > 0 ? remaining : 0;
-
-    document.getElementById("change").value =
-        cash > balance ? cash - balance : 0;
-});
-
-document.addEventListener("DOMContentLoaded", function () {
-
-    const cash = document.getElementById("cash_received");
-    const balanceInput = document.getElementById("balance");
-    const changeInput = document.getElementById("change");
-    const paymentType = document.querySelector("select[name='payment_type']");
-
-    // 💥 SOURCE OF TRUTH (NEVER CHANGE THIS)
-    const dbBalance = Number(balanceInput.value || 0);
-
-    let currentBalance = dbBalance;
-
-    // 💥 RESET FUNCTION
-    function resetBalance() {
-        currentBalance = dbBalance;
-        balanceInput.value = dbBalance;
-        cash.value = "";
-        changeInput.value = 0;
+    function reset() {
+        balanceEl.value = dbBalance;
+        cash.value      = '';
+        changeEl.value  = 0;
     }
 
-    // 💥 CASH COMPUTE
-    cash.addEventListener("input", function () {
+    cash.addEventListener('input', function () {
+        let cashVal = Number(this.value || 0);
 
-        let cashValue = Number(this.value || 0);
-        let remaining = dbBalance - cashValue;
-
-        if (remaining <= 0) {
-            changeInput.value = (cashValue - dbBalance).toFixed(2);
-            balanceInput.value = 0;
+        if (cashVal >= dbBalance) {
+            changeEl.value  = (cashVal - dbBalance).toFixed(2);
+            balanceEl.value = 0;
         } else {
-            changeInput.value = 0;
-            balanceInput.value = remaining;
+            changeEl.value  = 0;
+            balanceEl.value = (dbBalance - cashVal).toFixed(2);
         }
     });
 
-    // 💥 PAYMENT TYPE CHANGE = RESET EVERYTHING
-    paymentType.addEventListener("change", function () {
-        console.log("RESET TRIGGERED");
-        resetBalance();
-    });
-
+    // FIX: reset on payment type change so numbers don't carry over
+    paymentType.addEventListener('change', reset);
 });
-
 </script>
 
 @endsection
-

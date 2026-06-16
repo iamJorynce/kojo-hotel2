@@ -3,71 +3,61 @@
 @section('content')
 
 <div class="topbar">
-    <h2>Rooms Management</h2>
+    <h2>🏠 Rooms Management</h2>
     <a class="btn" href="/admin/rooms/create">+ Add Room</a>
 </div>
 
 @if(session('success'))
-    <div style="padding:10px; background:#d4edda; color:#155724; border-radius:6px; margin-bottom:15px;">
-        {{ session('success') }}
-    </div>
+    <div class="alert-success">{{ session('success') }}</div>
 @endif
 
-<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:15px;">
+@if(session('error'))
+    <div class="alert-error">{{ session('error') }}</div>
+@endif
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:15px;">
 
 @foreach($rooms as $room)
 
+@php
+// FIX: removed duplicate $category lookup — only do it once per room
+$category = $categories->firstWhere('id', $room['category_id'] ?? null);
+@endphp
 
 <div class="card">
 
-    <img src="{{ $room['image_url'] ?? 'https://via.placeholder.com/400' }}"
-         style="width:100%; height:180px; object-fit:cover; border-radius:8px;">
 
-    <!-- ROOM NUMBER -->
     <p style="
-        background:#0077b6;
-        color:white;
-        display:inline-block;
-        padding:5px 10px;
-        border-radius:5px;
-        margin-top:10px;
-        font-weight:bold;
-    ">
+        background:#0077b6;color:white;
+        display:inline-block;padding:5px 10px;
+        border-radius:5px;margin-top:10px;font-weight:bold;">
         Room No: {{ $room['room_number'] ?? 'N/A' }}
     </p>
 
-    <h3>{{ $room['name'] ?? 'No name' }}</h3>
+    <h3 style="margin:8px 0 4px;">{{ $room['name'] ?? 'No name' }}</h3>
 
-    @php
-    $category = $categories->firstWhere(
-        'id',
-        $room['category_id'] ?? null
-    );
-    @endphp
-
-    <p>
-    ₱{{ number_format($category['price'] ?? 0, 2) }}
+    <p style="color:#0a4a6e;font-weight:bold;">
+        ₱{{ number_format($category['price'] ?? 0, 2) }}
     </p>
 
-    @php
-    $category = $categories->firstWhere(
-        'id',
-        $room['category_id'] ?? null
-    );
-    @endphp
+    <p style="color:#666;font-size:13px;">
+        {{ $category['description'] ?? 'No description' }}
+    </p>
 
-    <p>{{ $category['description'] ?? 'No description' }}</p>
+    <p>
+        <b>Status:</b>
+        <span style="
+            background: {{ $room['status'] === 'available' ? 'green' : ($room['status'] === 'occupied' ? 'red' : 'orange') }};
+            color:white;padding:3px 8px;border-radius:5px;font-size:12px;">
+            {{ ucfirst($room['status'] ?? 'unknown') }}
+        </span>
+    </p>
 
-    <a class="btn btn-danger"
-       href="/admin/rooms/delete/{{ $room['id'] }}"
-       onclick="return confirm('Delete this room?')">
-       Delete
-    </a>
-
-   
-    <a href="/admin/rooms/calendar/{{ $room['id'] }}" class="btn">
-    📅 Calendar
-</a>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+       
+        <a href="/admin/rooms/calendar/{{ $room['id'] }}" class="btn">📅 Calendar</a>
+        
+    </div>
 
 </div>
 

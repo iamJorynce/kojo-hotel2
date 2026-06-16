@@ -3,7 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
-use Supabase\CreateClient;
+use Illuminate\Support\Str;
 
 class SupabaseService
 {
@@ -15,81 +15,53 @@ class SupabaseService
         $this->url = env('SUPABASE_URL');
         $this->key = env('SUPABASE_KEY');
     }
-    /*
-    |----------------------------------
-    | HEADERS
-    |----------------------------------
-    */
-private function headers()
-{
-    return [
-        'apikey' => $this->key,
-        'Authorization' => 'Bearer ' . $this->key,
-        'Content-Type' => 'application/json'
-    ];
-}
 
+    private function headers()
+    {
+        return [
+            'apikey'        => $this->key,
+            'Authorization' => 'Bearer ' . $this->key,
+            'Content-Type'  => 'application/json',
+        ];
+    }
 
- 
-
-    /*
-    |----------------------------------
-    | ROOMS
-    |----------------------------------
-    */
+    // ROOMS
     public function getRooms()
-{
-    $response = Http::withHeaders($this->headers())
-        ->get($this->url . '/rest/v1/rooms?select=*');
-
-    return $response->json();
-}
+    {
+        return Http::withHeaders($this->headers())
+            ->get($this->url . '/rest/v1/rooms?select=*')
+            ->json();
+    }
 
     public function createRoom($data)
-{
-    $response = Http::withHeaders([
-        'apikey' => $this->key,
-        'Authorization' => 'Bearer ' . $this->key,
-        'Content-Type' => 'application/json',
-        'Prefer' => 'return=representation'
-    ])->post($this->url . "/rest/v1/rooms", $data);
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->post($this->url . '/rest/v1/rooms', $data)
+            ->json();
+    }
 
-    return [
-        'status' => $response->status(),
-        'body' => $response->json()
-    ];
-}
+    public function updateRoom($id, $data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->patch($this->url . "/rest/v1/rooms?id=eq.$id", $data)
+            ->json();
+    }
 
-public function updateRoom($id, $data)
-{
-    $response = Http::withHeaders([
-        'apikey' => $this->key,
-        'Authorization' => 'Bearer ' . $this->key,
-        'Content-Type' => 'application/json',
-        'Prefer' => 'return=representation'
-    ])->patch($this->url . "/rest/v1/rooms?id=eq.$id", $data);
+    public function updateRoomByUuid($uuid, $data)
+    {
+        return Http::withHeaders($this->headers())
+            ->patch($this->url . '/rest/v1/rooms?uuid_id=eq.' . $uuid, $data)
+            ->json();
+    }
 
-    return [
-        'status' => $response->status(),
-        'body' => $response->json(),
-        'raw' => $response->body()
-    ];
-}
+    public function deleteRoom($id)
+    {
+        return Http::withHeaders($this->headers())
+            ->delete($this->url . "/rest/v1/rooms?id=eq.$id")
+            ->json();
+    }
 
-public function deleteRoom($id)
-{
-    return Http::withHeaders([
-        'apikey' => $this->key,
-        'Authorization' => 'Bearer ' . $this->key,
-    ])->delete($this->url . "/rest/v1/rooms?id=eq.$id")
-      ->json();
-}
-
-    /*
-    |----------------------------------
-    | BOOKINGS
-    |----------------------------------
-    */
+    // BOOKINGS
     public function getBookings()
     {
         return Http::withHeaders($this->headers())
@@ -97,288 +69,933 @@ public function deleteRoom($id)
             ->json();
     }
 
+    public function createBooking($data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->post($this->url . '/rest/v1/bookings', $data)
+            ->json();
+    }
 
-
-public function createBooking($data)
-{
-    $response = Http::withHeaders([
-        'apikey' => env('SUPABASE_KEY'),
-        'Authorization' => 'Bearer ' . env('SUPABASE_KEY'),
-        'Content-Type' => 'application/json',
-        'Prefer' => 'return=representation'
-    ])->post(env('SUPABASE_URL') . '/rest/v1/bookings', $data);
-
-    return $response->json(); // 🔥 IMPORTANT
-}
-
-public function updateBooking($id, $data)
-{
-    return Http::withHeaders($this->headers())
-        ->patch($this->url . "/rest/v1/bookings?id=eq.$id", $data)
-        ->json();
-}
+    public function updateBooking($id, $data)
+    {
+        return Http::withHeaders($this->headers())
+            ->patch($this->url . "/rest/v1/bookings?id=eq.$id", $data)
+            ->json();
+    }
 
     public function updateBookingStatus($id, $status)
     {
-        return Http::withHeaders($this->headers())
-            ->patch($this->url . '/rest/v1/bookings?id=eq.' . $id, [
-                'status' => $status
-            ])
-            ->json();
+        return $this->updateBooking($id, ['status' => $status]);
     }
 
     public function updateBookingPayment($id, $status)
     {
-        return Http::withHeaders($this->headers())
-            ->patch($this->url . '/rest/v1/bookings?id=eq.' . $id, [
-                'payment_status' => $status
-            ])
-            ->json();
+        return $this->updateBooking($id, ['payment_status' => $status]);
     }
 
-    /*
-    |----------------------------------
-    | LOGIN
-    |----------------------------------
-    */
+    public function getBookingById($id)
+    {
+        return collect($this->getBookings())->firstWhere('id', $id);
+    }
+
+    // LOGIN
     public function login($email, $password)
     {
-        $response = Http::withHeaders([
-            'apikey' => $this->key,
-            'Authorization' => 'Bearer ' . $this->key,
-        ])->get($this->url . '/rest/v1/users', [
-            'email' => 'eq.' . $email
-        ])->json();
+        $response = Http::withHeaders($this->headers())
+            ->get($this->url . '/rest/v1/users?email=eq.' . $email)
+            ->json();
 
         $user = $response[0] ?? null;
-
         if (!$user) return false;
+        if (!password_verify($password, $user['password'])) return false;
+        return $user;
+    }
 
-        if (!password_verify($password, $user['password'])) {
-            return false;
-        }
+    public function loginStaff($email, $password)
+    {
+        $response = Http::withHeaders($this->headers())
+            ->get($this->url . '/rest/v1/staff?email=eq.' . $email . '&is_active=eq.true')
+            ->json();
+
+        $user = $response[0] ?? null;
+        if (!$user) return false;
+        if (!password_verify($password, $user['password'])) return false;
+
+        Http::withHeaders($this->headers())
+            ->patch($this->url . "/rest/v1/staff?id=eq.{$user['id']}", [
+                'last_login_at' => now()->toISOString(),
+            ]);
 
         return $user;
     }
 
-    /*
-    |----------------------------------
-    | AVAILABILITY CHECK
-    |----------------------------------
-    */
+    // AVAILABILITY
     public function checkAvailability($roomUuid, $checkIn, $checkOut)
-{
-    $bookings = $this->getBookings();
-
-    foreach ($bookings as $b) {
-
-        if (($b['room_uuid'] ?? null) !== $roomUuid) {
-            continue;
+    {
+        $bookings = $this->getBookings();
+        foreach ($bookings as $b) {
+            if (($b['room_uuid'] ?? null) !== $roomUuid) continue;
+            if (!in_array($b['status'] ?? '', ['confirmed', 'checked_in'])) continue;
+            if ($checkIn < $b['check_out'] && $checkOut > $b['check_in']) {
+                return ['available' => false];
+            }
         }
-
-        $existingStart = $b['check_in'];
-        $existingEnd = $b['check_out'];
-
-        // 🚨 OVERLAP CHECK (CRITICAL)
-        if (
-        $checkIn < $existingEnd &&
-        $checkOut > $existingStart &&
-        in_array($b['status'], ['confirmed', 'checked_in'])
-        ) {
-        return [
-            'available' => false
-        ];
-        }
+        return ['available' => true];
     }
 
-    return [
-        'available' => true
-    ];
-}
-    /*
-    |----------------------------------
-    | ROOM STATUS ENGINE
-    |----------------------------------
-    */
+    public function isRoomAvailable($roomUuid, $checkIn, $checkOut)
+    {
+        $bookings = collect($this->getBookings());
+        return !$bookings->contains(function ($b) use ($roomUuid, $checkIn, $checkOut) {
+            if (($b['room_uuid'] ?? null) !== $roomUuid) return false;
+            if (!in_array($b['status'] ?? '', ['confirmed', 'checked_in'])) return false;
+            return $b['check_in'] < $checkOut && $b['check_out'] > $checkIn;
+        });
+    }
+
+    public function syncRoomStatus($roomUuid, $status)
+    {
+        $this->updateRoomByUuid($roomUuid, ['status' => $status]);
+    }
+
     public function updateRoomStatus($roomUuid)
-{
-    $bookings = $this->getBookings();
+    {
+        $bookings = collect($this->getBookings())
+            ->filter(fn($b) => ($b['room_uuid'] ?? null) === $roomUuid)
+            ->sortByDesc('check_out');
 
-    $latest = null;
-
-    foreach ($bookings as $b) {
-
-        if (($b['room_uuid'] ?? null) !== $roomUuid) {
-            continue;
+        $latest = $bookings->first();
+        if (!$latest) {
+            return $this->updateRoomByUuid($roomUuid, ['status' => 'available']);
         }
 
-        $latest = $b; // last booking wins
+        $status = $latest['status'] ?? '';
+        $payment = $latest['payment_status'] ?? '';
+
+        if ($status === 'checked_out') {
+            $roomStatus = 'available';
+        } elseif ($status === 'checked_in' || $payment === 'paid') {
+            $roomStatus = 'occupied';
+        } elseif (in_array($payment, ['partial', 'downpayment_paid'])) {
+            $roomStatus = 'reserved';
+        } else {
+            $roomStatus = 'available';
+        }
+
+        return $this->updateRoomByUuid($roomUuid, ['status' => $roomStatus]);
     }
 
-    if (!$latest) {
-        return $this->updateRoomByUuid($roomUuid, [
-            'status' => 'available'
+    // ROOM CATEGORIES
+    public function getRoomCategories()
+    {
+        return Http::withHeaders($this->headers())
+            ->get($this->url . '/rest/v1/room_categories?select=*')
+            ->json();
+    }
+
+    public function createRoomCategory($data)
+    {
+        return $this->insert('room_categories', [
+            'name'        => $data['name'],
+            'price'       => $data['price'],
+            'description' => $data['description'] ?? '',
+            'slug'        => Str::slug($data['name']),
         ]);
     }
 
-    $status = $latest['status'] ?? '';
-    $payment = $latest['payment_status'] ?? '';
-
-    $roomStatus = 'available';
-
-    if ($status === 'checked_out') {
-        $roomStatus = 'available';
-    }
-    elseif ($status === 'checked_in' || $payment === 'fully_paid') {
-        $roomStatus = 'occupied';
-    }
-    elseif ($payment === 'downpayment_paid') {
-        $roomStatus = 'reserved';
-    }
-
-    return $this->updateRoomByUuid($roomUuid, [
-        'status' => $roomStatus
-    ]);
-}
-
-    /*
-    |----------------------------------
-    | UPDATE ROOM BY UUID
-    |----------------------------------
-    */
-    public function updateRoomByUuid($uuid, $data)
+    public function updateRoomCategory($id, $data)
     {
-        return Http::withHeaders($this->headers())
-            ->patch($this->url . '/rest/v1/rooms?uuid_id=eq.' . $uuid, $data)
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->patch($this->url . "/rest/v1/room_categories?id=eq.$id", [
+                'name'        => $data['name'],
+                'price'       => $data['price'],
+                'description' => $data['description'] ?? '',
+            ])
             ->json();
     }
-/*
-    |----------------------------------
-    | GET ROOM CATEGORIES
-    |----------------------------------
-    */
-public function getRoomCategories()
-{
-    $response = Http::withHeaders($this->headers())
-        ->get($this->url . '/rest/v1/room_categories?select=*');
 
-    return $response->json();
-}
+    public function deleteRoomCategory($id)
+    {
+        return Http::withHeaders($this->headers())
+            ->delete($this->url . "/rest/v1/room_categories?id=eq.$id");
+    }
 
-/*
-|--------------------------------------------------------------------------
-| CORE AVAILABILITY FUNCTION (IMPORTANT)
-|--------------------------------------------------------------------------
-*/
+    // CONFLICT CHECK
+    public function hasConflict($bookings, $current, $excludeId = null)
+    {
+        return collect($bookings)->contains(function ($b) use ($current, $excludeId) {
+            if ($excludeId !== null && $b['id'] === $excludeId) return false;
+            if (($b['room_uuid'] ?? null) !== ($current['room_uuid'] ?? null)) return false;
+            if (!in_array($b['status'] ?? '', ['confirmed', 'checked_in'])) return false;
+            return $b['check_in'] < $current['check_out'] && $b['check_out'] > $current['check_in'];
+        });
+    }
 
+    // INSERT HELPER
+    public function insert($table, $data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->post($this->url . "/rest/v1/$table", $data)->json();
+    }
 
-public function isRoomAvailable($roomUuid, $checkIn, $checkOut)
-{
-    $bookings = collect($this->getBookings());
+    // DAY TOUR PACKAGES
+    public function getDayTourPackages()
+    {
+        return Http::withHeaders($this->headers())
+            ->get($this->url . '/rest/v1/day_tour_packages?select=*&order=price_per_person.asc')
+            ->json();
+    }
 
-    return !$bookings->contains(function ($b) use ($roomUuid, $checkIn, $checkOut) {
+    public function createDayTourPackage($data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->post($this->url . '/rest/v1/day_tour_packages', $data)->json();
+    }
 
-        if (($b['room_uuid'] ?? null) !== $roomUuid) {
-            return false;
+    public function updateDayTourPackage($id, $data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->patch($this->url . "/rest/v1/day_tour_packages?id=eq.$id", $data)->json();
+    }
+
+    public function deleteDayTourPackage($id)
+    {
+        return Http::withHeaders($this->headers())
+            ->delete($this->url . "/rest/v1/day_tour_packages?id=eq.$id")
+            ->json();
+    }
+
+    // DAY TOURS
+    public function getDayTours()
+    {
+        return Http::withHeaders($this->headers())
+            ->get($this->url . '/rest/v1/day_tours?select=*&order=visit_date.desc,created_at.desc')
+            ->json();
+    }
+
+    public function getDayTourById($id)
+    {
+        $result = Http::withHeaders($this->headers())
+            ->get($this->url . "/rest/v1/day_tours?id=eq.$id&select=*")
+            ->json();
+        return $result[0] ?? null;
+    }
+
+    public function createDayTour($data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->post($this->url . '/rest/v1/day_tours', $data)->json();
+    }
+
+    public function updateDayTour($id, $data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->patch($this->url . "/rest/v1/day_tours?id=eq.$id", $data)->json();
+    }
+
+    // STAFF
+    public function getStaff()
+    {
+        return Http::withHeaders($this->headers())
+            ->get($this->url . '/rest/v1/staff?select=id,full_name,email,role,is_active,created_at,last_login_at&order=created_at.desc')
+            ->json();
+    }
+
+    public function getStaffById($id)
+    {
+        $result = Http::withHeaders($this->headers())
+            ->get($this->url . "/rest/v1/staff?id=eq.$id&select=*")
+            ->json();
+        return $result[0] ?? null;
+    }
+
+    public function createStaff($data)
+    {
+        $data['password'] = password_hash($data['password'], PASSWORD_BCRYPT);
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->post($this->url . '/rest/v1/staff', $data)->json();
+    }
+
+    public function updateStaff($id, $data)
+    {
+        if (!empty($data['password'])) {
+            $data['password'] = password_hash($data['password'], PASSWORD_BCRYPT);
+        } else {
+            unset($data['password']);
+        }
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->patch($this->url . "/rest/v1/staff?id=eq.$id", $data)->json();
+    }
+
+    public function toggleStaffActive($id, $isActive)
+    {
+        return Http::withHeaders($this->headers())
+            ->patch($this->url . "/rest/v1/staff?id=eq.$id", ['is_active' => $isActive])
+            ->json();
+    }
+
+    public function deleteStaff($id)
+    {
+        return Http::withHeaders($this->headers())
+            ->delete($this->url . "/rest/v1/staff?id=eq.$id")
+            ->json();
+    }
+
+    // AUDIT LOG
+    public function log($action, $data = [])
+    {
+        $staffId   = session('admin_id')   ?? null;
+        $staffName = session('admin_name') ?? 'Unknown';
+        $staffRole = session('admin_role') ?? 'unknown';
+
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=minimal']))
+            ->post($this->url . '/rest/v1/audit_logs', [
+                'staff_id'     => $staffId,
+                'staff_name'   => $staffName,
+                'staff_role'   => $staffRole,
+                'action'       => $action,
+                'target_type'  => $data['target_type']  ?? null,
+                'target_id'    => (string) ($data['target_id']   ?? ''),
+                'target_label' => $data['target_label'] ?? null,
+                'amount'       => $data['amount']        ?? 0,
+                'payment_type' => $data['payment_type']  ?? null,
+                'notes'        => $data['notes']         ?? null,
+                'ip_address'   => request()->ip(),
+            ])->json();
+    }
+
+    public function getAuditLogs($filters = [])
+    {
+        $query = '/rest/v1/audit_logs?select=*&order=created_at.desc';
+
+        if (!empty($filters['staff_id'])) {
+            $query .= '&staff_id=eq.' . $filters['staff_id'];
+        }
+        if (!empty($filters['action'])) {
+            $query .= '&action=eq.' . $filters['action'];
+        }
+        if (!empty($filters['date'])) {
+            $query .= '&created_at=gte.' . $filters['date'] . 'T00:00:00'
+                    . '&created_at=lte.' . $filters['date'] . 'T23:59:59';
+        }
+        $query .= '&limit=500';
+
+        return Http::withHeaders($this->headers())
+            ->get($this->url . $query)
+            ->json();
+    }
+
+    // PAYMENT RECORDS
+    public function recordPayment($data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->post($this->url . '/rest/v1/payment_records', [
+                'staff_id'       => session('admin_id')   ?? null,
+                'staff_name'     => session('admin_name') ?? 'Unknown',
+                'target_type'    => $data['target_type'],
+                'target_id'      => (string) $data['target_id'],
+                'guest_name'     => $data['guest_name']    ?? null,
+                'room_info'      => $data['room_info']     ?? null,
+                'amount_received'=> $data['amount_received'],
+                'payment_type'   => $data['payment_type']  ?? null,
+                'payment_method' => $data['payment_method'] ?? 'cash',
+                'total_amount'   => $data['total_amount']  ?? null,
+                'balance_after'  => $data['balance_after'] ?? null,
+            ])->json();
+    }
+
+    public function getPaymentRecords($filters = [])
+    {
+        $query = '/rest/v1/payment_records?select=*&order=received_at.desc';
+
+        if (!empty($filters['staff_id'])) {
+            $query .= '&staff_id=eq.' . $filters['staff_id'];
+        }
+        if (!empty($filters['target_type'])) {
+            $query .= '&target_type=eq.' . $filters['target_type'];
+        }
+        if (!empty($filters['date'])) {
+            $query .= '&received_at=gte.' . $filters['date'] . 'T00:00:00'
+                    . '&received_at=lte.' . $filters['date'] . 'T23:59:59';
+        }
+        $query .= '&limit=500';
+
+        return Http::withHeaders($this->headers())
+            ->get($this->url . $query)
+            ->json();
+    }
+
+    // EQUIPMENT TYPES
+    public function getEquipmentTypes()
+    {
+        return Http::withHeaders($this->headers())
+            ->get($this->url . '/rest/v1/equipment_types?select=*&is_active=eq.true&order=name.asc')
+            ->json();
+    }
+
+    public function getEquipmentTypeById($id)
+    {
+        $result = Http::withHeaders($this->headers())
+            ->get($this->url . "/rest/v1/equipment_types?id=eq.$id&select=*")
+            ->json();
+        return $result[0] ?? null;
+    }
+
+    public function createEquipmentType($data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->post($this->url . '/rest/v1/equipment_types', [
+                'name'                 => $data['name']              ?? null,
+                'unit_price'           => $data['unit_price']        ?? 0,
+                'quantity_available'   => $data['quantity_available'] ?? 0,
+                'is_active'            => $data['is_active']         ?? true,
+            ])->json();
+    }
+
+    public function updateEquipmentType($id, $data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->patch($this->url . "/rest/v1/equipment_types?id=eq.$id", [
+                'name'                 => $data['name']              ?? null,
+                'unit_price'           => $data['unit_price']        ?? null,
+                'quantity_available'   => $data['quantity_available'] ?? null,
+                'is_active'            => $data['is_active']         ?? null,
+            ])->json();
+    }
+
+    public function deleteEquipmentType($id)
+    {
+        return Http::withHeaders($this->headers())
+            ->delete($this->url . "/rest/v1/equipment_types?id=eq.$id")
+            ->json();
+    }
+
+    // COTTAGES
+    public function getCottages()
+    {
+        return Http::withHeaders($this->headers())
+            ->get($this->url . '/rest/v1/cottages?select=*&is_active=eq.true&order=name.asc')
+            ->json();
+    }
+
+    public function getCottageById($id)
+    {
+        $result = Http::withHeaders($this->headers())
+            ->get($this->url . "/rest/v1/cottages?id=eq.$id&select=*")
+            ->json();
+        return $result[0] ?? null;
+    }
+
+    public function createCottage($data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->post($this->url . '/rest/v1/cottages', [
+                'name'               => $data['name']               ?? null,
+                'size_category'      => $data['size_category']      ?? 'small',
+                'price_per_day'      => $data['price_per_day']      ?? 0,
+                'quantity_available' => $data['quantity_available'] ?? 1,
+                'description'        => $data['description']        ?? null,
+                'is_active'          => $data['is_active']          ?? true,
+            ])->json();
+    }
+
+    public function updateCottage($id, $data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->patch($this->url . "/rest/v1/cottages?id=eq.$id", [
+                'name'               => $data['name']               ?? null,
+                'size_category'      => $data['size_category']      ?? null,
+                'price_per_day'      => $data['price_per_day']      ?? null,
+                'quantity_available' => $data['quantity_available'] ?? null,
+                'description'        => $data['description']        ?? null,
+                'is_active'          => $data['is_active']          ?? null,
+            ])->json();
+    }
+
+    public function deleteCottage($id)
+    {
+        return Http::withHeaders($this->headers())
+            ->delete($this->url . "/rest/v1/cottages?id=eq.$id")
+            ->json();
+    }
+
+    // EQUIPMENT RENTALS
+    public function createEquipmentRental($data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->post($this->url . '/rest/v1/equipment_rentals', [
+                'guest_name'      => $data['guest_name']      ?? null,
+                'phone'           => $data['phone']           ?? null,
+                'email'           => $data['email']           ?? null,
+                'rental_date'     => $data['rental_date']     ?? null,
+                'return_date'     => $data['return_date']     ?? null,
+                'days'            => $data['days']            ?? 1,
+                'total_amount'    => $data['total_amount']    ?? 0,
+                'paid_amount'     => $data['paid_amount']     ?? 0,
+                'balance_amount'  => $data['balance_amount']  ?? 0,
+                'payment_status'  => $data['payment_status']  ?? 'unpaid',
+                'status'          => $data['status']          ?? 'pending',
+                'notes'           => $data['notes']           ?? null,
+            ])->json();
+    }
+
+    public function getEquipmentRentals($filters = [])
+    {
+        $query = '/rest/v1/equipment_rentals?select=*&order=created_at.desc';
+
+        if (!empty($filters['status'])) {
+            $query .= '&status=eq.' . $filters['status'];
+        }
+        if (!empty($filters['date'])) {
+            $query .= '&rental_date=eq.' . $filters['date'];
+        }
+        if (!empty($filters['guest_name'])) {
+            $query .= '&guest_name=ilike.*' . urlencode($filters['guest_name']) . '*';
         }
 
-        // Only confirmed and checked_in can block
-        if (!in_array($b['status'] ?? '', ['confirmed', 'checked_in'])) {
-            return false;
+        return Http::withHeaders($this->headers())
+            ->get($this->url . $query)
+            ->json();
+    }
+
+    public function getEquipmentRentalById($id)
+    {
+        $result = Http::withHeaders($this->headers())
+            ->get($this->url . "/rest/v1/equipment_rentals?id=eq.$id&select=*")
+            ->json();
+        return $result[0] ?? null;
+    }
+
+    public function updateEquipmentRental($id, $data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->patch($this->url . "/rest/v1/equipment_rentals?id=eq.$id", [
+                'guest_name'      => $data['guest_name']      ?? null,
+                'phone'           => $data['phone']           ?? null,
+                'email'           => $data['email']           ?? null,
+                'rental_date'     => $data['rental_date']     ?? null,
+                'return_date'     => $data['return_date']     ?? null,
+                'days'            => $data['days']            ?? null,
+                'total_amount'    => $data['total_amount']    ?? null,
+                'paid_amount'     => $data['paid_amount']     ?? null,
+                'balance_amount'  => $data['balance_amount']  ?? null,
+                'payment_status'  => $data['payment_status']  ?? null,
+                'status'          => $data['status']          ?? null,
+                'notes'           => $data['notes']           ?? null,
+            ])->json();
+    }
+
+    // RENTAL ITEMS
+    public function addRentalItem($rentalId, $item)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->post($this->url . '/rest/v1/rental_items', [
+                'rental_id'  => $rentalId,
+                'item_type'  => $item['item_type']  ?? null,
+                'item_id'    => $item['item_id']    ?? null,
+                'item_name'  => $item['item_name']  ?? null,
+                'quantity'   => $item['quantity']   ?? 1,
+                'unit_price' => $item['unit_price'] ?? 0,
+                'days'       => $item['days']       ?? 1,
+                'subtotal'   => $item['subtotal']   ?? 0,
+            ])->json();
+    }
+
+    public function getRentalItems($rentalId)
+    {
+        return Http::withHeaders($this->headers())
+            ->get($this->url . "/rest/v1/rental_items?rental_id=eq.$rentalId&select=*")
+            ->json();
+    }
+
+    public function deleteRentalItem($id)
+    {
+        return Http::withHeaders($this->headers())
+            ->delete($this->url . "/rest/v1/rental_items?id=eq.$id")
+            ->json();
+    }
+
+    // RENTAL RETURNS
+    public function recordRentalReturn($rentalId, $data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->post($this->url . '/rest/v1/rental_returns', [
+                'rental_id'          => $rentalId,
+                'returned_date'      => $data['returned_date']      ?? date('Y-m-d'),
+                'returned_time'      => $data['returned_time']      ?? null,
+                'condition'          => $data['condition']          ?? 'good',
+                'damage_description' => $data['damage_description'] ?? null,
+                'damage_amount'      => $data['damage_amount']      ?? 0,
+                'notes'              => $data['notes']              ?? null,
+                'returned_by'        => $data['returned_by']        ?? null,
+                'inspected_by'       => $data['inspected_by']       ?? session('admin_name'),
+            ])->json();
+    }
+
+    public function getRentalReturn($rentalId)
+    {
+        $result = Http::withHeaders($this->headers())
+            ->get($this->url . "/rest/v1/rental_returns?rental_id=eq.$rentalId&select=*&order=created_at.desc&limit=1")
+            ->json();
+        return $result[0] ?? null;
+    }
+
+    public function updateRentalReturn($id, $data)
+    {
+        return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+            ->patch($this->url . "/rest/v1/rental_returns?id=eq.$id", [
+                'condition'          => $data['condition']          ?? null,
+                'damage_description' => $data['damage_description'] ?? null,
+                'damage_amount'      => $data['damage_amount']      ?? null,
+                'notes'              => $data['notes']              ?? null,
+                'inspected_by'       => $data['inspected_by']       ?? session('admin_name'),
+            ])->json();
+    }
+
+    public function checkEquipmentAvailability($equipmentId, $rentalDate, $returnDate)
+    {
+        $rentals = Http::withHeaders($this->headers())
+            ->get($this->url . "/rest/v1/equipment_rentals?select=id&status=neq.cancelled&rental_date=lte.$returnDate&return_date=gte.$rentalDate")
+            ->json();
+
+        if (empty($rentals)) {
+            return ['available' => true];
         }
 
-        return (
-            $b['check_in'] < $checkOut &&
-            $b['check_out'] > $checkIn
-        );
-    });
+        $rentalIds = array_column($rentals, 'id');
+        $query = '/rest/v1/rental_items?select=*&item_id=eq.' . $equipmentId;
+
+        $items = Http::withHeaders($this->headers())
+            ->get($this->url . $query)
+            ->json();
+
+        $totalRented = array_sum(array_column($items, 'quantity'));
+        $equipment = $this->getEquipmentTypeById($equipmentId);
+        $available = ($equipment['quantity_available'] ?? 0) - $totalRented;
+
+        return [
+            'available'       => $available > 0,
+            'quantity_booked' => $totalRented,
+            'quantity_left'   => max(0, $available),
+        ];
+    }
+
+    /*
+|==========================================================================
+| ADD THESE METHODS TO SupabaseService.php
+| Equipment Inventory Management
+|==========================================================================
+*/
+
+// Deduct equipment when rented
+public function deductEquipmentInventory($equipmentId, $quantity)
+{
+    $equipment = $this->getEquipmentTypeById($equipmentId);
+    if (!$equipment) return false;
+    
+    $newQty = max(0, ($equipment['quantity_available'] ?? 0) - $quantity);
+    
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->patch($this->url . "/rest/v1/equipment_types?id=eq.$equipmentId", [
+            'quantity_available' => $newQty
+        ])->json();
+}
+
+// Restore equipment when rental cancelled
+public function restoreEquipmentInventory($equipmentId, $quantity)
+{
+    $equipment = $this->getEquipmentTypeById($equipmentId);
+    if (!$equipment) return false;
+    
+    $newQty = ($equipment['quantity_available'] ?? 0) + $quantity;
+    
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->patch($this->url . "/rest/v1/equipment_types?id=eq.$equipmentId", [
+            'quantity_available' => $newQty
+        ])->json();
+}
+
+// Payment Submission methods
+public function createPaymentSubmission($data)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->post($this->url . '/rest/v1/payment_submissions', [
+            'staff_id'        => $data['staff_id']        ?? session('admin_id'),
+            'staff_name'      => $data['staff_name']      ?? session('admin_name'),
+            'submission_date' => $data['submission_date'] ?? date('Y-m-d'),
+            'total_cash'      => $data['total_cash']      ?? 0,
+            'payment_count'   => $data['payment_count']   ?? 0,
+            'status'          => 'pending',
+            'notes'           => $data['notes']           ?? null,
+        ])->json();
+}
+
+public function getPaymentSubmissions($filters = [])
+{
+    $query = '/rest/v1/payment_submissions?select=*&order=created_at.desc';
+    
+    if (!empty($filters['status'])) {
+        $query .= '&status=eq.' . $filters['status'];
+    }
+    if (!empty($filters['date'])) {
+        $query .= '&submission_date=eq.' . $filters['date'];
+    }
+    if (!empty($filters['staff_id'])) {
+        $query .= '&staff_id=eq.' . $filters['staff_id'];
+    }
+    
+    $query .= '&limit=500';
+    
+    return Http::withHeaders($this->headers())
+        ->get($this->url . $query)
+        ->json();
+}
+
+public function getPaymentSubmissionById($id)
+{
+    $result = Http::withHeaders($this->headers())
+        ->get($this->url . "/rest/v1/payment_submissions?id=eq.$id&select=*")
+        ->json();
+    return $result[0] ?? null;
+}
+
+public function updatePaymentSubmission($id, $data)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->patch($this->url . "/rest/v1/payment_submissions?id=eq.$id", [
+            'status'      => $data['status']      ?? null,
+            'admin_id'    => $data['admin_id']    ?? session('admin_id'),
+            'admin_name'  => $data['admin_name']  ?? session('admin_name'),
+            'approved_at' => $data['approved_at'] ?? ($data['status'] === 'approved' ? now()->toISOString() : null),
+            'notes'       => $data['notes']       ?? null,
+        ])->json();
+}
+
+public function addSubmissionItem($submissionId, $item)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->post($this->url . '/rest/v1/payment_submission_items', [
+            'submission_id'   => $submissionId,
+            'payment_record_id' => $item['payment_record_id'] ?? null,
+            'target_type'     => $item['target_type']     ?? null,
+            'target_id'       => $item['target_id']       ?? null,
+            'guest_name'      => $item['guest_name']      ?? null,
+            'amount'          => $item['amount']          ?? 0,
+        ])->json();
+}
+
+public function getSubmissionItems($submissionId)
+{
+    return Http::withHeaders($this->headers())
+        ->get($this->url . "/rest/v1/payment_submission_items?submission_id=eq.$submissionId&select=*")
+        ->json();
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| helper
-|--------------------------------------------------------------------------
-*/
-public function syncRoomStatus($roomUuid, $status)
+
+
+// COTTAGE BOOKINGS
+public function createCottageBooking($data)
 {
-    $this->updateRoom($roomUuid, [
-        'status' => $status
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->post($this->url . '/rest/v1/cottage_bookings', [
+            'cottage_id'       => $data['cottage_id'],
+            'guest_name'       => $data['guest_name'],
+            'guest_email'      => $data['guest_email'] ?? null,
+            'guest_phone'      => $data['guest_phone'],
+            'check_in'         => $data['check_in'],
+            'check_out'        => $data['check_out'],
+            'number_of_nights' => $data['number_of_nights'],
+            'price_per_night'  => $data['price_per_night'],
+            'total_amount'     => $data['total_amount'],
+            'paid_amount'      => 0,
+            'balance_amount'   => $data['total_amount'],
+            'payment_status'   => 'unpaid',
+            'booking_status'   => 'confirmed',
+            'notes'            => $data['notes'] ?? null,
+        ])->json();
+}
+
+public function getCottageBookings($filters = [])
+{
+    $query = '/rest/v1/cottage_bookings?select=*&order=check_in.desc';
+    if (!empty($filters['cottage_id'])) $query .= '&cottage_id=eq.' . $filters['cottage_id'];
+    if (!empty($filters['status']))     $query .= '&booking_status=eq.' . $filters['status'];
+    return Http::withHeaders($this->headers())->get($this->url . $query)->json();
+}
+
+public function getCottageBookingById($id)
+{
+    $result = Http::withHeaders($this->headers())
+        ->get($this->url . "/rest/v1/cottage_bookings?id=eq.$id&select=*")
+        ->json();
+    return $result[0] ?? null;
+}
+
+
+
+public function updateCottageBooking($id, $data)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->patch($this->url . "/rest/v1/cottage_bookings?id=eq.$id", $data)
+        ->json();
+}
+
+// GET ALL COTTAGES WITH AVAILABILITY STATUS FOR GIVEN DATES
+public function getCottagesWithAvailability($checkIn, $checkOut)
+{
+    $allCottages = $this->getCottages();
+    $allBookings = collect($this->getCottageBookings());
+
+    $result = [];
+    foreach ($allCottages as $cottage) {
+        // Check if this cottage has any conflicting booking
+        $isBooked = $allBookings->contains(function ($b) use ($cottage, $checkIn, $checkOut) {
+            if ($b['cottage_id'] != $cottage['id']) return false;
+            if (!in_array($b['booking_status'] ?? '', ['confirmed', 'checked_in'])) return false;
+            return $b['check_in'] < $checkOut && $b['check_out'] > $checkIn;
+        });
+
+        $cottage['is_available'] = !$isBooked;
+        $cottage['status_label'] = $isBooked ? 'Booked' : 'Available';
+
+        // Get cottage images
+        $cottage['images'] = $this->getCottageImages($cottage['id']);
+        $cottage['primary_image'] = collect($cottage['images'])->firstWhere('is_primary', true)
+            ?? ($cottage['images'][0] ?? null);
+
+        $result[] = $cottage;
+    }
+
+    return $result;
+}
+
+// CHECK COTTAGE AVAILABILITY
+
+
+// CHECK IF SPECIFIC COTTAGE IS AVAILABLE FOR DATES
+public function isCottageBookable($cottageId, $checkIn, $checkOut, $excludeId = null)
+{
+    $bookings = collect($this->getCottageBookings(['cottage_id' => $cottageId]))
+        ->filter(function ($b) use ($excludeId) {
+            if ($excludeId && $b['id'] == $excludeId) return false;
+            return in_array($b['booking_status'] ?? '', ['confirmed', 'checked_in']);
+        });
+
+    foreach ($bookings as $b) {
+        // Overlap check: b.check_in < checkOut AND b.check_out > checkIn
+        if ($b['check_in'] < $checkOut && $b['check_out'] > $checkIn) {
+            return false; // CONFLICT - NOT AVAILABLE
+        }
+    }
+
+    return true; // AVAILABLE
+}
+
+public function isCottageAvailable($cottageId, $checkIn, $checkOut, $excludeBookingId = null)
+{
+    $bookings = collect($this->getCottageBookings(['cottage_id' => $cottageId]))
+        ->filter(function ($b) use ($excludeBookingId) {
+            if ($excludeBookingId && $b['id'] == $excludeBookingId) return false;
+            return in_array($b['booking_status'] ?? '', ['confirmed', 'checked_in']);
+        });
+
+    foreach ($bookings as $b) {
+        if ($checkIn < $b['check_out'] && $checkOut > $b['check_in']) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// GET AVAILABLE COTTAGES FOR DATE RANGE
+public function getAvailableCottages($checkIn, $checkOut)
+{
+    $allCottages = collect($this->getCottages());
+    $bookings = collect($this->getCottageBookings());
+
+    $available = [];
+    foreach ($allCottages as $cottage) {
+        $isBooked = $bookings->contains(function ($b) use ($cottage, $checkIn, $checkOut) {
+            if ($b['cottage_id'] != $cottage['id']) return false;
+            if (!in_array($b['booking_status'] ?? '', ['confirmed', 'checked_in'])) return false;
+            return $checkIn < $b['check_out'] && $checkOut > $b['check_in'];
+        });
+
+        if (!$isBooked) {
+            $cottage['available'] = true;
+            $available[] = $cottage;
+        }
+    }
+
+    return $available;
+}
+
+// COTTAGE BOOKING PAYMENTS
+public function recordCottagePayment($bookingId, $data)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->post($this->url . '/rest/v1/cottage_booking_payments', [
+            'booking_id'    => $bookingId,
+            'staff_id'      => $data['staff_id'] ?? session('admin_id'),
+            'staff_name'    => $data['staff_name'] ?? session('admin_name'),
+            'amount_received' => $data['amount_received'],
+            'payment_method' => $data['payment_method'] ?? 'cash',
+            'payment_type'  => $data['payment_type'] ?? 'full',
+            'notes'         => $data['notes'] ?? null,
+        ])->json();
+}
+
+public function getCottageBookingPayments($bookingId)
+{
+    return Http::withHeaders($this->headers())
+        ->get($this->url . "/rest/v1/cottage_booking_payments?booking_id=eq.$bookingId&select=*&order=received_at.desc")
+        ->json();
+}
+
+
+
+// COTTAGE IMAGES
+public function getCottageImages($cottageId)
+{
+    return Http::withHeaders($this->headers())
+        ->get($this->url . "/rest/v1/cottage_images?cottage_id=eq.$cottageId&select=*&order=is_primary.desc")
+        ->json();
+}
+
+public function addCottageImage($cottageId, $imageUrl, $isPrimary = false)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->post($this->url . '/rest/v1/cottage_images', [
+            'cottage_id' => $cottageId,
+            'image_url'  => $imageUrl,
+            'is_primary' => $isPrimary,
+        ])->json();
+}
+
+public function deleteCottageImage($id)
+{
+    return Http::withHeaders($this->headers())
+        ->delete($this->url . "/rest/v1/cottage_images?id=eq.$id")
+        ->json();
+}
+
+// COTTAGE PAYMENT
+public function payCottageBooking($id, $amount, $staffName = null)
+{
+    $booking = $this->getCottageBookingById($id);
+    if (!$booking) return false;
+
+    $newPaid = (float)($booking['paid_amount'] ?? 0) + (float)$amount;
+    $newBalance = (float)$booking['total_amount'] - $newPaid;
+    $newStatus = $newBalance <= 0 ? 'paid' : 'unpaid';
+
+    return $this->updateCottageBooking($id, [
+        'paid_amount'    => $newPaid,
+        'balance_amount' => max(0, $newBalance),
+        'payment_status' => $newStatus,
     ]);
-}
-
-public function createRoomCategory($data)
-{
-    return $this->insert('room_categories', [
-        'name' => $data['name'],
-        'price' => $data['price'],
-        'slug' => \Str::slug($data['name']) // 🔥 ADD THIS
-    ]);
-}
-
-public function insert($table, $data)
-{
-    return Http::withHeaders([
-        'apikey' => $this->key,
-        'Authorization' => 'Bearer ' . $this->key,
-        'Content-Type' => 'application/json',
-        'Prefer' => 'return=representation'
-    ])->post($this->url . "/rest/v1/" . $table, $data)->json();
-}
-public function deleteRoomCategory($id)
-{
-    return Http::withHeaders([
-        'apikey' => $this->key,
-        'Authorization' => 'Bearer ' . $this->key,
-    ])->delete($this->url . "/rest/v1/room_categories?id=eq." . $id);
-}
-
-public function updateRoomCategory($id, $data)
-{
-    return Http::withHeaders([
-        'apikey' => $this->key,
-        'Authorization' => 'Bearer ' . $this->key,
-        'Content-Type' => 'application/json',
-        'Prefer' => 'return=representation'
-    ])->patch($this->url . "/rest/v1/room_categories?id=eq.$id", [
-        'name' => $data['name'],
-        'price' => $data['price'],
-        'description' => $data['description'],
-    ])->json();
-}
-/*
-|--------------------------------------------------------------------------
-| SA CANCELLED BOOKINGS NI PARA DILI AMG ERROR
-|--------------------------------------------------------------------------
-*/
-
-public function getBookingById($id)
-{
-    return collect($this->getBookings())
-        ->firstWhere('id', $id);
-}
-/*
-|--------------------------------------------------------------------------
-| has clonflicts
-|--------------------------------------------------------------------------
-*/
-public function hasConflict($bookings, $current)
-{
-    return collect($bookings)->contains(function ($b) use ($current) {
-
-        if (($b['room_uuid'] ?? null) !== $current['room_uuid']) {
-            return false;
-        }
-
-        if (!in_array($b['status'], ['confirmed', 'checked_in'])) {
-            return false;
-        }
-
-        return (
-            $b['check_in'] < $current['check_out'] &&
-            $b['check_out'] > $current['check_in']
-        );
-    });
 }
 
 }

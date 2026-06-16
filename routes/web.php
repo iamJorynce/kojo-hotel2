@@ -5,1275 +5,1915 @@ use Illuminate\Http\Request;
 use App\Http\Controllers\RoomController;
 use App\Services\SupabaseService;
 
-
 /*
 |--------------------------------------------------------------------------
-| PUBLIC PAGES
+| AUTH MIDDLEWARE
 |--------------------------------------------------------------------------
+*/
+function adminGuard() {
+    if (!session('admin_logged_in')) {
+        return redirect('/admin/login');
+    }
+    return null;
+}
+
+/*
+|==========================================================================
+| PUBLIC PAGES
+|==========================================================================
 */
 
 Route::get('/', function (SupabaseService $supabase) {
-
-    $rooms = collect($supabase->getRooms())
-        ->groupBy('category_id');
-
+    $rooms      = collect($supabase->getRooms())->groupBy('category_id');
     $categories = $supabase->getRoomCategories();
-
     return view('home', compact('rooms', 'categories'));
 });
 
-
 Route::get('/rooms', function (Request $request, SupabaseService $supabase) {
-
-    $rooms = collect($supabase->getRooms());
+    $rooms      = collect($supabase->getRooms());
     $categories = collect($supabase->getRoomCategories());
+    $checkIn    = $request->check_in;
+    $checkOut   = $request->check_out;
 
-    $checkIn = $request->check_in;
-    $checkOut = $request->check_out;
-
-    // 🔥 MAP ROOMS CLEANLY
     $rooms = $rooms->map(function ($room) use ($supabase, $checkIn, $checkOut, $categories) {
-
-        $available = true;
+        $available   = true;
         $bookedUntil = null;
 
-        // availability check
         if ($checkIn && $checkOut) {
-
-            $result = $supabase->checkAvailability(
-                $room['uuid_id'],
-                $checkIn,
-                $checkOut
-            );
-
-            $available = $result['available'] ?? true;
+            $result      = $supabase->checkAvailability($room['uuid_id'], $checkIn, $checkOut);
+            $available   = $result['available'] ?? true;
             $bookedUntil = $result['booked_until'] ?? null;
         }
 
-        // 🔥 CATEGORY PRICE FIX (IMPORTANT)
-        $category = $categories->firstWhere('id', $room['category_id']);
-
-        $room['price'] = $category['price'] ?? 0;
-        $room['category_name'] = $category['name'] ?? 'N/A';
-
-        // availability fields
-        $room['available'] = $available;
-        $room['booked_until'] = $bookedUntil;
-
+        $category              = $categories->firstWhere('id', $room['category_id']);
+        $room['price']         = $category['price'] ?? 0;
+        $room['category_name'] = $category['name']  ?? 'N/A';
+        $room['available']     = $available;
+        $room['booked_until']  = $bookedUntil;
         return $room;
     });
 
-    return view('rooms', compact(
-        'rooms',
-        'categories',
-        'checkIn',
-        'checkOut'
-    ));
+    return view('rooms', compact('rooms', 'categories', 'checkIn', 'checkOut'));
 });
 
+Route::get('/book-category/{categoryId}', function ($categoryId, SupabaseService $supabase) {
+    $categories = collect($supabase->getRoomCategories());
+    $rooms      = collect($supabase->getRooms());
+    $category   = $categories->firstWhere('id', $categoryId);
 
+    if (!$category) abort(404);
+    if (!isset($category['price']) || $category['price'] <= 0) {
+        return back()->with('error', 'Category price not set');
+    }
 
+    $price         = (float) $category['price'];
+    $room          = $rooms->firstWhere('category_id', $categoryId);
+    if (!$room) return back()->with('error', 'No room found');
 
+    $room['price']         = $price;
+    $room['category_name'] = $category['name'];
+    $room['downpayment']   = $price * 0.5;
+    $room['balance']       = $price * 0.5;
+
+    return view('book-category', compact('room'));
+});
+
+Route::post('/book/{uuid}', function ($uuid, Request $request, SupabaseService $supabase) {
+    $room = collect($supabase->getRooms())->firstWhere('uuid_id', $uuid);
+    if (!$room) return back()->with('error', 'Room not found');
+
+    if ($request->check_in < date('Y-m-d')) return back()->with('error', 'Invalid check-in date');
+    if ($request->check_out <= $request->check_in) return back()->with('error', 'Invalid date range');
+
+    if (!$supabase->isRoomAvailable($room['uuid_id'], $request->check_in, $request->check_out)) {
+        return back()->with('error', 'Room already booked');
+    }
+
+    $category      = collect($supabase->getRoomCategories())->firstWhere('id', $room['category_id']);
+    $pricePerNight = (float) ($category['price'] ?? 0);
+    $checkIn       = new DateTime($request->check_in);
+    $checkOut      = new DateTime($request->check_out);
+    $nights        = $checkIn->diff($checkOut)->days;
+    $total         = $pricePerNight * $nights;
+
+    $response = $supabase->createBooking([
+        'room_uuid'      => $room['uuid_id'],
+        'room_name'      => $room['name'],
+        'room_number'    => $room['room_number'] ?? null,
+        'room_price'     => $pricePerNight,
+        'total_amount'   => $total,
+        'paid_amount'    => 0,
+        'balance_amount' => $total,
+        'full_name'      => $request->full_name,
+        'phone'          => $request->phone,
+        'email'          => $request->email,
+        'check_in'       => $request->check_in,
+        'check_out'      => $request->check_out,
+        'nights'         => $nights,
+        'status'         => 'pending',
+        'payment_status' => 'unpaid',
+    ]);
+
+    if (!$response) return back()->with('error', 'Booking failed');
+    return redirect('/booking-success')->with('success', 'Booking successful');
+});
+
+Route::get('/booking-success', fn() => view('booking-success'));
 
 /*
-|--------------------------------------------------------------------------
-| ADMIN LOGIN
-|--------------------------------------------------------------------------
-*/  
+|==========================================================================
+| DAY TOUR — PUBLIC
+|==========================================================================
+*/
 
-Route::get('/admin/login', function () {
-    return view('admin.login');
+Route::get('/day-tour', function (SupabaseService $supabase) {
+    $packages = $supabase->getDayTourPackages();
+    return view('day-tour', compact('packages'));
 });
 
-Route::post('/admin/login', function (Request $request, SupabaseService $auth) {
+Route::get('/day-tour/book/{packageId}', function ($packageId, SupabaseService $supabase) {
+    $package = collect($supabase->getDayTourPackages())->firstWhere('id', $packageId);
+    if (!$package) abort(404);
+    return view('day-tour-book', compact('package'));
+});
 
-    $user = $auth->login($request->email, $request->password);
+Route::post('/day-tour/book/{packageId}', function ($packageId, Request $request, SupabaseService $supabase) {
+    $package = collect($supabase->getDayTourPackages())->firstWhere('id', $packageId);
+    if (!$package) return back()->with('error', 'Package not found.');
 
-    if (!$user) {
-        return back()->with('error', 'Invalid credentials');
-    }
+    $guests = (int) $request->guest_count;
+    if ($guests <= 0) return back()->with('error', 'Invalid number of guests.');
+    if ($request->visit_date < date('Y-m-d')) return back()->with('error', 'Visit date cannot be in the past.');
+
+    $pricePerPerson = (float) $package['price_per_person'];
+    $total          = $pricePerPerson * $guests;
+
+    $response = $supabase->createDayTour([
+        'package_id'       => $package['id'],
+        'package_name'     => $package['name'],
+        'price_per_person' => $pricePerPerson,
+        'guest_count'      => $guests,
+        'total_amount'     => $total,
+        'paid_amount'      => 0,
+        'balance_amount'   => $total,
+        'full_name'        => $request->full_name,
+        'phone'            => $request->phone,
+        'email'            => $request->email ?? null,
+        'visit_date'       => $request->visit_date,
+        'notes'            => $request->notes ?? null,
+        'status'           => 'pending',
+        'payment_status'   => 'unpaid',
+        'type'             => 'advance',
+    ]);
+
+    if (!$response) return back()->with('error', 'Booking failed. Please try again.');
+    return redirect('/day-tour/success')->with('success', 'Day tour booked successfully!');
+});
+
+Route::get('/day-tour/success', fn() => view('day-tour-success'));
+
+/*
+|==========================================================================
+| ADMIN — LOGIN / LOGOUT
+|==========================================================================
+*/
+
+Route::get('/admin/login', fn() => view('admin.login'));
+
+Route::post('/admin/login', function (Request $request, SupabaseService $supabase) {
+    $user = $supabase->loginStaff($request->email, $request->password);
+
+    if (!$user) return back()->with('error', 'Invalid credentials or account disabled.');
 
     session([
         'admin_logged_in' => true,
-        'admin_id' => $user['id'],
-        'admin_role' => $user['role']
+        'admin_id'        => $user['id'],
+        'admin_name'      => $user['full_name'],
+        'admin_role'      => $user['role'],
     ]);
 
-    return redirect('/admin/rooms');
+    $supabase->log('login', [
+        'target_type'  => 'staff',
+        'target_id'    => $user['id'],
+        'target_label' => $user['full_name'] . ' (' . $user['role'] . ')',
+    ]);
+
+    return redirect('/admin/dashboard');
 });
 
-
-
-Route::get('/admin/logout', function () {
-
+Route::get('/admin/logout', function (SupabaseService $supabase) {
+    if (session('admin_logged_in')) {
+        $supabase->log('logout', [
+            'target_type'  => 'staff',
+            'target_id'    => session('admin_id'),
+            'target_label' => session('admin_name'),
+        ]);
+    }
     session()->flush();
     session()->regenerateToken();
-
     return redirect('/admin/login');
 });
 
-
 /*
-|--------------------------------------------------------------------------
-| ADMIN ROOMS
-|--------------------------------------------------------------------------
+|==========================================================================
+| ADMIN — DASHBOARD
+|==========================================================================
 */
 
-Route::get('/admin/rooms', function (SupabaseService $supabase) {
+Route::get('/admin/dashboard', function (SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
 
-    $rooms = $supabase->getRooms();
+    $rooms    = collect($supabase->getRooms());
+    $bookings = collect($supabase->getBookings());
+    $today    = date('Y-m-d');
 
-    $categories = collect(
-        $supabase->getRoomCategories()
+    $todayCheckins = $bookings->filter(fn($b) =>
+        $b['check_in'] === $today && in_array($b['status'], ['confirmed', 'checked_in'])
     );
 
-    return view('admin.rooms', compact(
-        'rooms',
-        'categories'
+    $todayCheckouts = $bookings->filter(fn($b) =>
+        $b['check_out'] === $today && $b['status'] === 'checked_in'
+    );
+
+    $totalRooms    = $rooms->count();
+    $occupiedRooms = $bookings->filter(fn($b) =>
+        $b['status'] === 'checked_in' &&
+        $b['check_in'] <= $today &&
+        $b['check_out'] >= $today
+    )->count();
+
+    $availableRooms    = $totalRooms - $occupiedRooms;
+    $pendingBookings   = $bookings->where('status', 'pending')->count();
+    $confirmedBookings = $bookings->where('status', 'confirmed')->count();
+
+    return view('admin.dashboard', compact(
+        'totalRooms', 'availableRooms', 'occupiedRooms',
+        'pendingBookings', 'confirmedBookings',
+        'todayCheckins', 'todayCheckouts'
     ));
 });
 
+/*
+|==========================================================================
+| ADMIN — ROOMS
+|==========================================================================
+*/
 
-
+Route::get('/admin/rooms', function (SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $rooms      = $supabase->getRooms();
+    $categories = collect($supabase->getRoomCategories());
+    return view('admin.rooms', compact('rooms', 'categories'));
+});
 
 Route::get('/admin/rooms/create', function (SupabaseService $supabase) {
-
-    $rooms = collect($supabase->getRooms());
+    if ($r = adminGuard()) return $r;
+    $rooms      = collect($supabase->getRooms());
     $categories = collect($supabase->getRoomCategories());
-
     return view('admin.rooms-create', compact('rooms', 'categories'));
 });
 
-Route::post('/admin/rooms/create', function (Illuminate\Http\Request $request, SupabaseService $supabase) {
+Route::post('/admin/rooms/create', function (Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
 
     $categories = collect($supabase->getRoomCategories());
-
-    $category = $categories->firstWhere('id', $request->category_id);
-
-    $roomName = ($category['name'] ?? 'Room');
+    $category   = $categories->firstWhere('id', $request->category_id);
+    $roomName   = $category['name'] ?? 'Room';
 
     $response = $supabase->createRoom([
-        'name' => $roomName,
+        'name'        => $roomName,
         'room_number' => trim($request->room_number),
         'category_id' => $request->category_id,
-        'status' => 'available',
-        'image_url' => $request->image_url ?? null
+        'status'      => 'available',
+        'image_url'   => $request->image_url ?? null,
     ]);
 
-    if (!$response) {
-        return back()->with('error', 'Failed to create room');
-    }
+    if (!$response) return back()->with('error', 'Failed to create room');
+
+    $supabase->log('room_created', [
+        'target_type'  => 'room',
+        'target_label' => $roomName . ' Room ' . $request->room_number,
+    ]);
 
     return back()->with('success', 'Room created successfully');
-
 });
 
+// Calendar routes BEFORE wildcard {id} routes
+Route::get('/admin/rooms/calendar/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $room = collect($supabase->getRooms())->firstWhere('id', $id);
+    if (!$room) abort(404);
+    return view('admin.room-calendar', compact('room'));
+});
 
+Route::get('/admin/rooms/{id}/calendar-data', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $room = collect($supabase->getRooms())->firstWhere('id', $id);
+    if (!$room) abort(404);
 
-Route::get('/admin/rooms/delete/{id}', function ($id, SupabaseService $supabase) {
-
-    $response = $supabase->deleteRoom($id);
-
-    if (!$response) {
-        return back()->with('error', 'Failed to delete room');
+    $events = [];
+    foreach ($supabase->getBookings() as $b) {
+        if (($b['room_uuid'] ?? null) !== $room['uuid_id']) continue;
+        $events[] = [
+            'title' => ($b['full_name'] ?? 'Guest') . ' - Room ' . ($b['room_number'] ?? ''),
+            'start' => $b['check_in'],
+            'end'   => date('Y-m-d', strtotime($b['check_out'] . ' +1 day')),
+            'color' => match($b['status'] ?? 'pending') {
+                'confirmed'  => 'green',
+                'pending'    => 'orange',
+                'checked_in' => 'blue',
+                'cancelled'  => 'red',
+                default      => 'gray',
+            },
+        ];
     }
-
-    return back()->with('success', 'Room deleted successfully');
+    return response()->json($events);
 });
 
 Route::get('/admin/rooms/edit/{id}', function ($id, SupabaseService $supabase) {
-
-    $rooms = collect($supabase->getRooms());
+    if ($r = adminGuard()) return $r;
+    $rooms      = collect($supabase->getRooms());
     $categories = collect($supabase->getRoomCategories());
-
-    $room = $rooms->firstWhere('id', $id);
-
-    if (!$room) {
-        return back()->with('error', 'Room not found');
-    }
-
+    $room       = $rooms->firstWhere('id', $id);
+    if (!$room) return back()->with('error', 'Room not found');
     return view('admin.rooms-edit', compact('room', 'categories'));
 });
 
-
-Route::post('/admin/rooms', function (Request $request, SupabaseService $supabase) {
-
-    $supabase->createRoom([
+Route::post('/admin/rooms/update/{id}', function ($id, Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $supabase->updateRoom($id, [
         'room_number' => $request->room_number,
-        'name' => $request->name,
-        'price' => $request->price,
-        'description' => $request->description ?? '',
-        'image_url' => $request->image_url ?? '',
-        'status' => 'available',
-
-        // 🔥 IMPORTANT
         'category_id' => $request->category_id,
+        'status'      => $request->status,
     ]);
-
-    return redirect('/admin/rooms')->with('success', 'Room added successfully');
+    return redirect('/admin/rooms')->with('success', 'Room updated successfully');
 });
 
-
 Route::get('/admin/rooms/delete/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $response = $supabase->deleteRoom($id);
+    if (!$response) return back()->with('error', 'Failed to delete room');
 
-    $supabase->deleteRoom($id);
+    $supabase->log('room_deleted', [
+        'target_type' => 'room',
+        'target_id'   => $id,
+    ]);
 
     return back()->with('success', 'Room deleted successfully');
 });
 
-
 /*
-|--------------------------------------------------------------------------
-| ADMIN BOOKINGS
-|--------------------------------------------------------------------------
+|==========================================================================
+| ADMIN — BOOKINGS
+|==========================================================================
 */
 
 Route::get('/admin/bookings', function (Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
 
-    if (!session('admin_logged_in')) {
-        return redirect('/admin/login');
-    }
-
-    $status = $request->get('status', 'all');
-
+    $status   = $request->get('status', 'all');
     $bookings = collect($supabase->getBookings());
 
-    // 🔥 HERE IBUTANG ANG CONFLICT LOGIC
-   $bookings = collect($bookings)->map(function ($b) use ($bookings) {
-
-    $b['has_conflict'] = $bookings->contains(function ($x) use ($b) {
-
-            // 🚨 SKIP SELF (IMPORTANT FIX)
-            if ($x['id'] === $b['id']) {
-            return false;
-            }
-        
-            if (($x['room_uuid'] ?? null) !== $b['room_uuid']) {
-                return false;
-            }
-
-            if (!in_array($x['status'], ['confirmed', 'checked_in'])) {
-                return false;
-            }
-
-            return (
-                $x['check_in'] < $b['check_out'] &&
-                $x['check_out'] > $b['check_in']
-            );
+    $bookings = $bookings->map(function ($b) use ($bookings) {
+        $b['has_conflict'] = $bookings->contains(function ($x) use ($b) {
+            if ($x['id'] === $b['id']) return false;
+            if (($x['room_uuid'] ?? null) !== ($b['room_uuid'] ?? null)) return false;
+            if (!in_array($x['status'], ['confirmed', 'checked_in'])) return false;
+            return $x['check_in'] < $b['check_out'] && $x['check_out'] > $b['check_in'];
         });
-
         return $b;
     });
 
-    if ($status !== 'all') {
-        $bookings = $bookings->where('status', $status);
+    if ($status !== 'all') $bookings = $bookings->where('status', $status);
+
+    return view('admin.bookings', compact('bookings', 'status'));
+});
+
+Route::get('/admin/bookings/confirmed', function (SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    return app(RoomController::class)->confirmedBookings();
+});
+
+Route::get('/admin/bookings/create', function (SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $rooms      = $supabase->getRooms();
+    $categories = $supabase->getRoomCategories();
+    return view('admin.bookings-create', compact('rooms', 'categories'));
+});
+
+Route::post('/admin/bookings/create', function (Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+
+    $room = collect($supabase->getRooms())->firstWhere('uuid_id', $request->room_id);
+    if (!$room) return back()->with('error', 'Room not found');
+
+    $category      = collect($supabase->getRoomCategories())->firstWhere('id', $room['category_id']);
+    $pricePerNight = (float) ($category['price'] ?? 0);
+    if ($pricePerNight <= 0) return back()->with('error', 'Invalid room price');
+
+    $checkIn  = new DateTime($request->check_in);
+    $checkOut = new DateTime($request->check_out);
+    $nights   = $checkIn->diff($checkOut)->days;
+    if ($nights <= 0) return back()->with('error', 'Invalid number of nights');
+
+    $total        = $pricePerNight * $nights;
+    $availability = $supabase->checkAvailability($room['uuid_id'], $request->check_in, $request->check_out);
+    if (!($availability['available'] ?? false)) return back()->with('error', 'Room already booked');
+
+    $cashReceived = (float) $request->cash_received;
+    if ($cashReceived >= $total) {
+        $payment_status = 'paid';   $paid_amount = $total;  $balance = 0;
+    } elseif ($cashReceived > 0) {
+        $payment_status = 'partial'; $paid_amount = $cashReceived; $balance = $total - $cashReceived;
+    } else {
+        $payment_status = 'unpaid';  $paid_amount = 0; $balance = $total;
     }
 
-    return view('admin.bookings', [
-        'bookings' => $bookings,
-        'status' => $status
+    $response = $supabase->createBooking([
+        'room_uuid'        => $room['uuid_id'],
+        'room_name'        => $room['name']        ?? '',
+        'room_number'      => $room['room_number']  ?? '',
+        'room_price'       => $pricePerNight,
+        'room_description' => $room['description'] ?? '',
+        'full_name'        => $request->full_name,
+        'phone'            => $request->phone,
+        'email'            => $request->email ?? null,
+        'check_in'         => $request->check_in,
+        'check_out'        => $request->check_out,
+        'nights'           => $nights,
+        'status'           => 'confirmed',
+        'payment_status'   => $payment_status,
+        'total_amount'     => $total,
+        'paid_amount'      => $paid_amount,
+        'balance_amount'   => $balance,
     ]);
-});
 
-Route::get('/admin/bookings/confirmed', function () {
+    if (!$response) return back()->with('error', 'Booking failed');
 
-    if (!session('admin_logged_in')) {
-        return redirect('/admin/login');
-    }
+    $supabase->updateRoom($room['uuid_id'], ['status' => 'reserved']);
 
-    return app(App\Http\Controllers\RoomController::class)
-        ->confirmedBookings();
-});
-
-Route::get('/admin/bookings/cancel/{id}', function ($id, SupabaseService $supabase) {
-
-    $booking = $supabase->getBookingById($id);
-
-    if (!$booking) {
-        return back()->with('error', 'Booking not found');
-    }
-
-    // 🚨 SAFETY RULE
-    if ($booking['status'] === 'checked_in') {
-        return back()->with('error', 'Cannot cancel checked-in booking');
-    }
-
-    if ($booking['payment_status'] === 'paid') {
-        return back()->with('error', 'Cannot cancel paid booking');
-    }
-
-    $supabase->updateBooking($id, [
-        'status' => 'cancelled'
+    $supabase->log('booking_created', [
+        'target_type'  => 'booking',
+        'target_label' => $request->full_name . ' — ' . ($room['name'] ?? '') . ' Room ' . ($room['room_number'] ?? '') . ' (' . $nights . ' nights)',
+        'amount'       => $paid_amount,
+        'payment_type' => $payment_status !== 'unpaid' ? $payment_status : null,
     ]);
 
-    return back()->with('success', 'Booking cancelled successfully');
-});
+    if ($paid_amount > 0) {
+        $supabase->recordPayment([
+            'target_type'     => 'booking',
+            'target_id'       => $response[0]['id'] ?? '',
+            'guest_name'      => $request->full_name,
+            'room_info'       => ($room['name'] ?? '') . ' Room ' . ($room['room_number'] ?? ''),
+            'amount_received' => $paid_amount,
+            'payment_type'    => $payment_status,
+            'payment_method'  => 'cash',
+            'total_amount'    => $total,
+            'balance_after'   => $balance,
+        ]);
+    }
 
+    return redirect('/admin/bookings')->with('success', 'Booking created successfully');
+});
 
 Route::get('/admin/bookings/confirm/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
 
-    if (!session('admin_logged_in')) {
-        return redirect('/admin/login');
-    }
-
-    $booking = collect($supabase->getBookings())
-        ->firstWhere('id', $id);
-
-    if (!$booking) {
-        return back()->with('error', 'Booking not found');
-    }
-
-    // 🧠 STEP 1 — CHECK CONFLICT (IBUTANG DRI)
     $bookings = collect($supabase->getBookings());
+    $booking  = $bookings->firstWhere('id', $id);
+    if (!$booking) return back()->with('error', 'Booking not found');
 
     $conflict = $bookings->contains(function ($b) use ($booking) {
-
-        if ($b['room_uuid'] !== $booking['room_uuid']) {
-            return false;
-        }
-
-        if (!in_array($b['status'], ['confirmed', 'checked_in'])) {
-            return false;
-        }
-
-        return (
-            $b['check_in'] < $booking['check_out'] &&
-            $b['check_out'] > $booking['check_in']
-        );
+        if ($b['id'] === $booking['id']) return false;
+        if (($b['room_uuid'] ?? null) !== ($booking['room_uuid'] ?? null)) return false;
+        if (!in_array($b['status'], ['confirmed', 'checked_in'])) return false;
+        return $b['check_in'] < $booking['check_out'] && $b['check_out'] > $booking['check_in'];
     });
 
-    if ($conflict) {
-        return back()->with('error', 'Room already reserved for these dates.');
-    }
+    if ($conflict) return back()->with('error', 'Room already reserved for these dates.');
 
-    // 🚀 STEP 2 — CONFIRM ONLY IF SAFE
-    $supabase->updateBooking($id, [
-        'status' => 'confirmed'
-    ]);
-
+    $supabase->updateBooking($id, ['status' => 'confirmed']);
     $supabase->syncRoomStatus($booking['room_uuid'], 'reserved');
 
-    $supabase->updateRoom($booking['room_uuid'], [
-        'status' => 'reserved'
+    $supabase->log('booking_confirmed', [
+        'target_type'  => 'booking',
+        'target_id'    => $id,
+        'target_label' => ($booking['full_name'] ?? '') . ' — ' . ($booking['room_name'] ?? ''),
     ]);
 
     return back()->with('success', 'Booking confirmed');
 });
 
+Route::get('/admin/bookings/cancel/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
 
+    $booking = $supabase->getBookingById($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    if ($booking['status'] === 'checked_in') return back()->with('error', 'Cannot cancel a checked-in booking');
+    if ($booking['payment_status'] === 'paid') return back()->with('error', 'Cannot cancel a paid booking');
 
+    $supabase->updateBooking($id, ['status' => 'cancelled']);
 
-
-/*
-|--------------------------------------------------------------------------
-| BOOKING SUCCESS PAGE
-|--------------------------------------------------------------------------
-*/
-
-Route::get('/booking-success', function () {
-    return view('booking-success');
-});
-/*
-|--------------------------------------------------------------------------
-| EDIT ROOMS
-|--------------------------------------------------------------------------
-*/
-
-
-Route::post('/admin/rooms/update/{id}', function ($id, Illuminate\Http\Request $request, SupabaseService $supabase) {
-
-    $response = $supabase->updateRoom($id, [
-        'room_number' => $request->room_number,
-        'category_id' => $request->category_id, // 💥 IMPORTANT
-        'status' => $request->status
+    $supabase->log('booking_cancelled', [
+        'target_type'  => 'booking',
+        'target_id'    => $id,
+        'target_label' => ($booking['full_name'] ?? '') . ' — ' . ($booking['room_name'] ?? ''),
     ]);
 
-    if (!$response) {
-   
-}
-
-    return redirect('/admin/rooms')
-        ->with('success', 'Room updated successfully');
-
+    return back()->with('success', 'Booking cancelled');
 });
-/*
-|--------------------------------------------------------------------------
-| calendar
-|--------------------------------------------------------------------------
-*/
-Route::get('/admin/rooms/{id}/calendar-data', function ($id, App\Services\SupabaseService $supabase) {
-
-    $rooms = $supabase->getRooms();
-    $room = collect($rooms)->firstWhere('id', $id);
-
-    if (!$room) abort(404);
-
-    $bookings = $supabase->getBookings();
-
-    $events = []; // 🔥 IMPORTANT INIT
-
-    foreach ($bookings as $b) {
-
-        // FILTER ONLY THIS ROOM
-        if (($b['room_uuid'] ?? null) !== $room['uuid_id']) {
-            continue;
-        }
-
-        // COLOR MAP
-        $color = match($b['status'] ?? 'pending') {
-            'confirmed' => 'green',
-            'pending' => 'orange',
-            'checked_in' => 'blue',
-            'cancelled' => 'red',
-            default => 'gray'
-        };
-
-        $events[] = [
-            'title' => ($b['full_name'] ?? 'Guest') . ' - ' . ($b['room_name'] ?? '').' - Room ' . ($b['room_number'] ?? ''),
-
-            'start' => $b['check_in'],
-
-            // 🔥 FIX: FullCalendar end is exclusive
-            'end' => date('Y-m-d', strtotime($b['check_out'] . ' +1 day')),
-
-            'color' => $color,
-        ];
-    }
-
-    return response()->json($events);
-});
-Route::get('/admin/rooms/calendar/{id}', function ($id, App\Services\SupabaseService $supabase) {
-
-    if (!session('admin_logged_in')) {
-        return redirect('/admin/login');
-    }
-
-    $rooms = $supabase->getRooms();
-    $room = collect($rooms)->firstWhere('id', $id);
-
-    if (!$room) {
-        abort(404);
-    }
-
-    return view('admin.room-calendar', compact('room'));
-});
-/*
-|--------------------------------------------------------------------------
-| PUBLIC PAGES
-|--------------------------------------------------------------------------
-*/
-
-
-Route::post('/book/{uuid}', function ($uuid, Request $request, SupabaseService $supabase) {
-
-    // 1. FIND ROOM
-    $room = collect($supabase->getRooms())
-        ->firstWhere('uuid_id', $uuid);
-
-    if (!$room) {
-        return back()->with('error', 'Room not found');
-    }
-
-    $roomUuid = $room['uuid_id'];
-
-    // 2. DATE VALIDATION
-    if ($request->check_in < date('Y-m-d')) {
-        return back()->with('error', 'Invalid check-in date');
-    }
-
-    if ($request->check_out <= $request->check_in) {
-        return back()->with('error', 'Invalid date range');
-    }
-
-    // 3. FINAL AVAILABILITY CHECK
-    if (!$supabase->isRoomAvailable(
-        $roomUuid,
-        $request->check_in,
-        $request->check_out
-    )) {
-        return back()->with('error', 'Room already booked');
-    }
-
-    // 4. PRICE CALCULATION
-    $category = collect($supabase->getRoomCategories())
-        ->firstWhere('id', $room['category_id']);
-
-    $pricePerNight = $category['price'] ?? 0;
-
-    $checkIn = new DateTime($request->check_in);
-    $checkOut = new DateTime($request->check_out);
-
-    $nights = $checkIn->diff($checkOut)->days;
-
-    $total = $pricePerNight * $nights;
-
-    // 💥 IMPORTANT FIX (NO DP HERE)
-    $paid_amount = 0;
-    $balance_amount = $total;
-    $payment_status = 'unpaid';
-
-    // 5. CREATE BOOKING
-    $response = $supabase->createBooking([
-        'room_uuid' => $room['uuid_id'],
-        'room_name' => $room['name'],
-        'room_number' => $room['room_number'] ?? null,
-        'room_price' => $pricePerNight,
-
-        'total_amount' => $total,
-        'paid_amount' => $paid_amount,
-        'balance_amount' => $balance_amount,
-
-        'full_name' => $request->full_name,
-        'phone' => $request->phone,
-        'email' => $request->email,
-
-        'check_in' => $request->check_in,
-        'check_out' => $request->check_out,
-
-        'nights' => $nights,
-
-        'status' => 'pending',
-        'payment_status' => $payment_status,
-    ]);
-
-    if (!$response) {
-        return back()->with('error', 'Booking failed');
-    }
-
-    return redirect('/booking-success')
-        ->with('success', 'Booking successful');
-});
-/*
-|--------------------------------------------------------------------------
-| para ni sa viewing 
-|--------------------------------------------------------------------------
-*/
-Route::get('/admin/bookings/create', function (SupabaseService $supabase) {
-
-    $rooms = $supabase->getRooms();
-    $categories = $supabase->getRoomCategories();
-
-    return view('admin.bookings-create', compact('rooms', 'categories'));
-});
-/*
-|--------------------------------------------------------------------------
-| para pag fetch
-|--------------------------------------------------------------------------
-*/
-Route::post('/admin/bookings/create', function (
-    Illuminate\Http\Request $request,
-    App\Services\SupabaseService $supabase
-) {
-
-    // 📍 GET ROOM
-    $roomId = $request->room_id;
-
-    $room = collect($supabase->getRooms())
-        ->firstWhere('uuid_id', $roomId);
-
-    if (!$room) {
-        return back()->with('error', 'Room not found');
-    }
-
-    // 📍 CATEGORY
-    $category = collect($supabase->getRoomCategories())
-        ->firstWhere('id', $room['category_id']);
-
-    $pricePerNight = $category['price'] ?? 0;
-
-    $pricePerNight = (float) $category['price'];
-    $nights = $checkIn->diff($checkOut)->days;
-
-    $total = $pricePerNight * $nights;
-
-if ($pricePerNight <= 0) {
-    return back()->with('error', 'Invalid room price');
-}
-
-    // 📍 DATES
-    $checkIn = new DateTime($request->check_in);
-    $checkOut = new DateTime($request->check_out);
-
-    $nights = $checkIn->diff($checkOut)->days;
-
-    if ($nights <= 0) {
-        return back()->with('error', 'Invalid number of nights');
-    }
-
-    // 📍 TOTAL CALCULATION
-    $total = $pricePerNight * $nights;
-
-    // 📍 AVAILABILITY CHECK (ONLY ONCE)
-    $availability = $supabase->checkAvailability(
-        $room['uuid_id'],
-        $request->check_in,
-        $request->check_out
-    );
-
-    if (!($availability['available'] ?? false)) {
-        return back()->with('error', 'Room already booked');
-    }
-
-    // 📍 CASH INPUT
-    $cashReceived = (float) $request->cash_received;
-
-    // 📍 PAYMENT LOGIC (FIXED CORE ISSUE)
-    $cashReceived = (float) $request->cash_received;
-
-if ($cashReceived < 0) {
-    return back()->with('error', 'Invalid payment amount');
-}
-
-// PARTIAL OR FULL PAYMENT SUPPORT
-if ($cashReceived >= $total) {
-
-    // FULL PAYMENT
-    $payment_status = 'paid';
-    $paid_amount = $total;
-    $balance = 0;
-
-} else {
-
-    // PARTIAL PAYMENT
-    if ($cashReceived <= 0) {
-        return back()->with('error', 'Partial payment requires amount');
-    }
-
-    $payment_status = 'partial';
-    $paid_amount = $cashReceived;
-    $balance = $total - $cashReceived;
-}
-
-    // 📍 CREATE BOOKING (FIXED MAPPING)
-    $response = $supabase->createBooking([
-        'room_uuid' => $room['uuid_id'],
-        'room_name' => $room['name'] ?? '',
-        'room_number' => $room['room_number'] ?? '',
-        'room_price' => $pricePerNight,
-        'room_description' => $room['description'] ?? '',
-
-        'full_name' => $request->full_name,
-        'phone' => $request->phone,
-        'email' => $request->email,
-
-        'check_in' => $request->check_in,
-        'check_out' => $request->check_out,
-        'nights' => $nights,
-
-        'status' => 'confirmed',
-
-        // 💥 FIXED PAYMENT FIELDS
-        'payment_status' => $payment_status,
-        'total_amount' => $total,
-        'paid_amount' => $paid_amount,
-        'balance_amount' => $balance,
-    ]);
-
-    if (!$response) {
-        return back()->with('error', 'Booking failed');
-    }
-
-    // 📍 UPDATE ROOM STATUS
-    $supabase->updateRoom($room['uuid_id'], [
-        'status' => 'reserved'
-    ]);
-
-    return redirect('/admin/bookings/confirmed')
-        ->with('success', 'Booking created successfully');
-});
-
-
-/*
-|--------------------------------------------------------------------------
-| BOOKING CALENDAR MODULE
-|--------------------------------------------------------------------------
-*/
-
-Route::get('/admin/booking-calendar', function (App\Services\SupabaseService $supabase) {
-
-    if (!session('admin_logged_in')) {
-        return redirect('/admin/login');
-    }
-
-    $bookings = $supabase->getBookings();
-    $rooms = collect($supabase->getRooms());
-
-    $events = [];
-
-    foreach ($bookings as $b) {
-
-        $room = $rooms->firstWhere('uuid_id', $b['room_uuid']);
-
-        $events[] = [
-             'title' => ($b['full_name'] ?? 'Guest') . ' - ' . ($b['room_name'] ?? '').' - Room ' . ($b['room_number'] ?? ''),
-            'start' => $b['check_in'],
-            'end' => date('Y-m-d', strtotime($b['check_out'] . ' +1 day')),
-
-            'color' => match($b['status'] ?? 'pending') {
-                'pending' => 'orange',
-                'confirmed' => 'green',
-                'checked_in' => 'blue',
-                'cancelled' => 'red',
-                default => 'gray'
-            },
-
-            // 👇 IMPORTANT DATA FOR CLICK
-            'extendedProps' => [
-                'guest' => $b['full_name'] ?? '-',
-                'phone' => $b['phone'] ?? '-',
-                'room_number' => $room['room_number'] ?? '-',
-                'room_type' => $room['name'] ?? '-',
-                'check_in' => $b['check_in'] ?? '-',
-                'check_out' => $b['check_out'] ?? '-',
-                'status' => $b['status'] ?? '-',
-            ]
-        ];
-    }
-
-    return view('admin.booking-calendar', compact('events'));
-});
-
-
-/*
-|--------------------------------------------------------------------------
-| CHECKIN ROUTE
-|--------------------------------------------------------------------------
-*/
 
 Route::get('/admin/bookings/checkin/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
 
-    if (!session('admin_logged_in')) {
-        return redirect('/admin/login');
-    }
+    $booking = collect($supabase->getBookings())->firstWhere('id', $id);
+    if (!$booking) return back()->with('error', 'Booking not found');
 
-    $booking = collect($supabase->getBookings())
-        ->firstWhere('id', $id);
-
-    if (!$booking) {
-        return back()->with('error', 'Booking not found');
-    }
-
-    // 💥 STRICT PAYMENT RULE (IMPORTANT FIX)
-    if (
-        ($booking['payment_status'] ?? '') !== 'paid' ||
-        ($booking['balance_amount'] ?? 0) > 0
-    ) {
+    if (($booking['payment_status'] ?? '') !== 'paid' || ($booking['balance_amount'] ?? 1) > 0) {
         return back()->with('error', 'Full payment required before check-in');
     }
 
-    // check-in update
-    $supabase->updateBooking($id, [
-        'status' => 'checked_in'
+    $supabase->updateBooking($id, ['status' => 'checked_in']);
+    $supabase->syncRoomStatus($booking['room_uuid'], 'occupied');
+
+    $supabase->log('checkin', [
+        'target_type'  => 'booking',
+        'target_id'    => $id,
+        'target_label' => ($booking['full_name'] ?? '') . ' — ' . ($booking['room_name'] ?? '') . ' Room ' . ($booking['room_number'] ?? ''),
     ]);
 
     return back()->with('success', 'Guest checked in');
 });
-/*
-|--------------------------------------------------------------------------
-| PAYMENT ROUTE
-|--------------------------------------------------------------------------
-*/
 
 Route::get('/admin/bookings/fullpay/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+
+    $booking = collect($supabase->getBookings())->firstWhere('id', $id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+
+    $total = (float) ($booking['total_amount'] ?? 0);
 
     $supabase->updateBooking($id, [
-        'payment_status' => 'fully_paid'
+        'payment_status' => 'paid',
+        'paid_amount'    => $total,
+        'balance_amount' => 0,
+    ]);
+
+    $supabase->log('payment_received', [
+        'target_type'  => 'booking',
+        'target_id'    => $id,
+        'target_label' => ($booking['full_name'] ?? '') . ' — Full Payment',
+        'amount'       => $total,
+        'payment_type' => 'full',
+    ]);
+
+    $supabase->recordPayment([
+        'target_type'     => 'booking',
+        'target_id'       => $id,
+        'guest_name'      => $booking['full_name']  ?? '',
+        'room_info'       => ($booking['room_name'] ?? '') . ' Room ' . ($booking['room_number'] ?? ''),
+        'amount_received' => $total,
+        'payment_type'    => 'full',
+        'payment_method'  => 'cash',
+        'total_amount'    => $total,
+        'balance_after'   => 0,
     ]);
 
     return back()->with('success', 'Fully paid');
 });
-/*
-|--------------------------------------------------------------------------
-| CHECKED-IN MODULE used for checking out
-|--------------------------------------------------------------------------
-*/
-Route::get('/admin/bookings/checked-in', function (App\Services\SupabaseService $supabase) {
 
-    if (!session('admin_logged_in')) {
-        return redirect('/admin/login');
+Route::get('/admin/bookings/downpayment/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+
+    $booking = collect($supabase->getBookings())->firstWhere('id', $id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    if (($booking['payment_status'] ?? 'unpaid') !== 'unpaid') return back()->with('error', 'Already processed');
+
+    $supabase->updateBooking($id, ['payment_status' => 'partial', 'status' => 'confirmed']);
+    $supabase->syncRoomStatus($booking['room_uuid'], 'reserved');
+
+    return back()->with('success', 'Downpayment received + confirmed');
+});
+
+Route::get('/admin/bookings/payment/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $booking = collect($supabase->getBookings())->firstWhere('id', $id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    return view('admin.payment', compact('booking'));
+});
+
+Route::post('/admin/bookings/payment/{id}', function ($id, Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+
+    $booking = collect($supabase->getBookings())->firstWhere('id', $id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+
+    $cash = (float) $request->cash_received;
+    if ($cash <= 0) return back()->with('error', 'Invalid cash amount');
+
+    $total       = (float) $booking['total_amount'];
+    $alreadyPaid = (float) ($booking['paid_amount'] ?? 0);
+    $balance     = $total - $alreadyPaid;
+    $newBalance  = 0;
+
+    if ($request->payment_type === 'full') {
+        if ($cash < $balance) return back()->with('error', 'Insufficient cash. Balance is ₱' . number_format($balance, 2));
+        $supabase->updateBooking($id, [
+            'paid_amount' => $total, 'balance_amount' => 0,
+            'payment_status' => 'paid', 'status' => 'confirmed',
+        ]);
+        $newBalance = 0;
     }
 
+    if ($request->payment_type === 'partial') {
+        $newPaid    = $alreadyPaid + $cash;
+        $newBalance = max(0, $total - $newPaid);
+        $supabase->updateBooking($id, [
+            'paid_amount'    => $newPaid,
+            'balance_amount' => $newBalance,
+            'payment_status' => $newBalance <= 0 ? 'paid' : 'partial',
+            'status'         => 'confirmed',
+        ]);
+    }
+
+    $supabase->log('payment_received', [
+        'target_type'  => 'booking',
+        'target_id'    => $id,
+        'target_label' => ($booking['full_name'] ?? '') . ' — ' . ($booking['room_name'] ?? '') . ' Room ' . ($booking['room_number'] ?? ''),
+        'amount'       => $cash,
+        'payment_type' => $request->payment_type,
+    ]);
+
+    $supabase->recordPayment([
+        'target_type'     => 'booking',
+        'target_id'       => $id,
+        'guest_name'      => $booking['full_name']  ?? '',
+        'room_info'       => ($booking['room_name'] ?? '') . ' Room ' . ($booking['room_number'] ?? ''),
+        'amount_received' => $cash,
+        'payment_type'    => $request->payment_type,
+        'payment_method'  => 'cash',
+        'total_amount'    => $total,
+        'balance_after'   => $newBalance,
+    ]);
+
+    return redirect('/admin/bookings')->with('success', 'Payment updated successfully');
+});
+
+Route::get('/admin/bookings/checked-in', function (SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
     $bookings = collect($supabase->getBookings());
-    $rooms = collect($supabase->getRooms());
-
+    $rooms    = collect($supabase->getRooms());
     $bookings = $bookings->map(function ($b) use ($rooms) {
-
-        $room = $rooms->firstWhere('uuid_id', $b['room_uuid']);
-
+        $room             = $rooms->firstWhere('uuid_id', $b['room_uuid']);
         $b['room_number'] = $room['room_number'] ?? 'N/A';
-        $b['room_type'] = $room['name'] ?? 'N/A';
-
+        $b['room_type']   = $room['name']        ?? 'N/A';
         return $b;
     })->where('status', 'checked_in')->values();
-
     return view('admin.bookings-checked-in', compact('bookings'));
 });
-/*
-|--------------------------------------------------------------------------
-| CHECK-OUT MODULE
-|--------------------------------------------------------------------------
-*/
-Route::get('/admin/bookings/checkout/{id}', function ($id, App\Services\SupabaseService $supabase) {
 
-    $booking = collect($supabase->getBookings())
-        ->firstWhere('id', $id);
+Route::get('/admin/bookings/checkout/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $booking = collect($supabase->getBookings())->firstWhere('id', $id);
+    if (!$booking) return back()->with('error', 'Booking not found');
 
-    if (!$booking) {
-        return back()->with('error', 'Booking not found');
-    }
-
-    // 🟢 STEP 1 — UPDATE BOOKING STATUS
-    $supabase->updateBooking($id, [
-        'status' => 'checked_out'  
-    ]);
+    $supabase->updateBooking($id, ['status' => 'checked_out']);
     $supabase->syncRoomStatus($booking['room_uuid'], 'available');
 
-    // 🟢 STEP 2 — FREE THE ROOM
-    $supabase->updateRoom($booking['room_uuid'], [
-        'status' => 'available'
+    $supabase->log('checkout', [
+        'target_type'  => 'booking',
+        'target_id'    => $id,
+        'target_label' => ($booking['full_name'] ?? '') . ' — ' . ($booking['room_name'] ?? '') . ' Room ' . ($booking['room_number'] ?? ''),
     ]);
 
     return back()->with('success', 'Guest checked out successfully');
 });
 
-/*
-|--------------------------------------------------------------------------
-| DOWNPAYMENT ROUTE
-|--------------------------------------------------------------------------
-*/
-Route::get('/admin/bookings/downpayment/{id}', function ($id, SupabaseService $supabase) {
-
-    if (!session('admin_logged_in')) {
-        return redirect('/admin/login');
+Route::get('/admin/booking-calendar', function (SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $bookings = $supabase->getBookings();
+    $rooms    = collect($supabase->getRooms());
+    $events   = [];
+    foreach ($bookings as $b) {
+        $room     = $rooms->firstWhere('uuid_id', $b['room_uuid'] ?? null);
+        $events[] = [
+            'title'  => ($b['full_name'] ?? 'Guest') . ' - ' . ($b['room_name'] ?? '') . ' - Room ' . ($b['room_number'] ?? ''),
+            'start'  => $b['check_in'],
+            'end'    => date('Y-m-d', strtotime($b['check_out'] . ' +1 day')),
+            'color'  => match($b['status'] ?? 'pending') {
+                'pending' => 'orange', 'confirmed' => 'green',
+                'checked_in' => 'blue', 'cancelled' => 'red', default => 'gray',
+            },
+            'extendedProps' => [
+                'guest'       => $b['full_name']      ?? '-',
+                'phone'       => $b['phone']          ?? '-',
+                'room_number' => $room['room_number'] ?? '-',
+                'room_type'   => $room['name']        ?? '-',
+                'check_in'    => $b['check_in']       ?? '-',
+                'check_out'   => $b['check_out']      ?? '-',
+                'status'      => $b['status']         ?? '-',
+            ],
+        ];
     }
-
-    $booking = collect($supabase->getBookings())
-        ->firstWhere('id', $id);
-
-    if (!$booking) {
-        return back()->with('error', 'Booking not found');
-    }
-
-    if (($booking['payment_status'] ?? 'unpaid') !== 'unpaid') {
-        return back()->with('error', 'Already processed');
-    }
-
-    // 🟢 AUTO CONFIRM SYSTEM (OPTION B)
-    $supabase->updateBooking($id, [
-        'payment_status' => 'downpayment_paid',
-        'status' => 'confirmed'
-    ]);
-
-    return back()->with('success', '✅ Downpayment received + AUTO CONFIRMED');
+    return view('admin.booking-calendar', compact('events'));
 });
 
+// POST versions for form-based actions
+Route::post('/admin/check-in/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $booking = $supabase->getBookingById($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    $supabase->updateBooking($id, ['status' => 'checked_in']);
+    $supabase->syncRoomStatus($booking['room_uuid'], 'occupied');
+    $supabase->log('checkin', ['target_type' => 'booking', 'target_id' => $id, 'target_label' => $booking['full_name'] ?? '']);
+    return back()->with('success', 'Checked in');
+});
 
-/*
-|--------------------------------------------------------------------------
-| ADMIN DASHBOARD
-|--------------------------------------------------------------------------
-*/
-Route::get('/admin/dashboard', function (App\Services\SupabaseService $supabase) {
+Route::post('/admin/check-out/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $booking = $supabase->getBookingById($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    $supabase->updateBooking($id, ['status' => 'checked_out']);
+    $supabase->syncRoomStatus($booking['room_uuid'], 'available');
+    $supabase->log('checkout', ['target_type' => 'booking', 'target_id' => $id, 'target_label' => $booking['full_name'] ?? '']);
+    return back()->with('success', 'Checked out');
+});
 
-    if (!session('admin_logged_in')) {
-        return redirect('/admin/login');
-    }
-
-    
-    $rooms = collect($supabase->getRooms());
+Route::post('/admin/bookings/{id}/confirm', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
     $bookings = collect($supabase->getBookings());
-
-    
-//TodayCheckIns
-    $today = date('Y-m-d');
-$todayCheckins = $bookings->filter(function ($b) use ($today) {
-    return $b['check_in'] === $today
-        && in_array($b['status'], ['reserved', 'checked_in']);
+    $booking  = $bookings->firstWhere('id', $id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    $supabase->updateBooking($id, ['status' => 'confirmed']);
+    $supabase->syncRoomStatus($booking['room_uuid'], 'reserved');
+    $supabase->log('booking_confirmed', ['target_type' => 'booking', 'target_id' => $id, 'target_label' => $booking['full_name'] ?? '']);
+    return back()->with('success', 'Booking confirmed');
 });
 
-//TodayCheckOuts
-    $todayCheckouts = $bookings->filter(function ($b) use ($today) {
-    return $b['check_out'] === $today
-        && $b['status'] === 'checked_in';
+Route::post('/admin/bookings/{id}/checkin', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $booking = collect($supabase->getBookings())->firstWhere('id', $id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    if (($booking['payment_status'] ?? '') !== 'paid') return back()->with('error', 'Must be fully paid');
+    $supabase->updateBooking($id, ['status' => 'checked_in']);
+    $supabase->syncRoomStatus($booking['room_uuid'], 'occupied');
+    $supabase->log('checkin', ['target_type' => 'booking', 'target_id' => $id, 'target_label' => $booking['full_name'] ?? '']);
+    return back()->with('success', 'Checked in');
 });
 
-    // ROOM STATS
-    $totalRooms = $rooms->count();
-
-    // occupied based on actual check-in
-    $today = date('Y-m-d');
-
-$occupiedRooms = $bookings->filter(function ($b) use ($today) {
-    return $b['status'] === 'checked_in'
-        && $b['check_in'] <= $today
-        && $b['check_out'] >= $today;
+Route::post('/admin/bookings/{id}/checkout', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $booking = collect($supabase->getBookings())->firstWhere('id', $id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    $supabase->updateBooking($id, ['status' => 'checked_out']);
+    $supabase->syncRoomStatus($booking['room_uuid'], 'available');
+    $supabase->log('checkout', ['target_type' => 'booking', 'target_id' => $id, 'target_label' => $booking['full_name'] ?? '']);
+    return back()->with('success', 'Checked out');
 });
 
-   
-
-    $availableRooms = $totalRooms - $occupiedRooms;
-
-    // BOOKING STATS
-    $pendingBookings = $bookings->where('status', 'pending')->count();
-    $confirmedBookings = $bookings->where('status', 'confirmed')->count();
-
-    return view('admin.dashboard', compact(
-    'totalRooms',
-    'availableRooms',
-    'occupiedRooms',
-    'pendingBookings',
-    'confirmedBookings',
-    'todayCheckins',
-    'todayCheckouts'
-));
-});
-
-
-/*
-|--------------------------------------------------------------------------
-| CHECK-IN ACTION (ADMIN)
-|--------------------------------------------------------------------------
-*/
-Route::post('/admin/check-in/{id}', function (
-    $id,
-    SupabaseService $supabase
-) {
-
-    $booking = $supabase->getBooking($id);
-
-    // 🔥 UPDATE BOOKING
-    $supabase->updateBooking($id, [
-    'status' => 'checked_in'
-]);
-
-$supabase->updateRoom($booking['room_uuid'], [
-    'status' => 'occupied'
-]);
-
-    return back();
-});
-
-/*
-|--------------------------------------------------------------------------
-| CHECK-OUT ACTION (ADMIN)
-|--------------------------------------------------------------------------
-*/
-Route::post('/admin/check-out/{id}', function (
-    $id,
-    SupabaseService $supabase
-) {
-
-    $booking = $supabase->getBooking($id);
-
-    $supabase->updateBooking($id, [
-    'status' => 'checked_out'
-]);
-
-$supabase->updateRoom($booking['room_uuid'], [
-    'status' => 'available'
-]);
-
-    return back();
-});
-/*
-|--------------------------------------------------------------------------
-| POST ROUTE (CREATE BOOKING)
-|--------------------------------------------------------------------------
-*/
-Route::post('/admin/bookings/{id}/downpayment', function (
-    $id,
-    SupabaseService $supabase
-) {
-
-    $supabase->updateBooking($id, [
-        'payment_status' => 'downpayment_paid',
-        'status' => 'confirmed'
-    ]);
-
-    $supabase->syncRoomStatus($room['uuid_id']);
-
+Route::post('/admin/bookings/{id}/downpayment', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $booking = collect($supabase->getBookings())->firstWhere('id', $id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    $supabase->updateBooking($id, ['payment_status' => 'partial', 'status' => 'confirmed']);
+    $supabase->syncRoomStatus($booking['room_uuid'], 'reserved');
     return back()->with('success', 'Downpayment saved');
 });
 
 /*
-|--------------------------------------------------------------------------
-| CONFIRM BOOKING
-|--------------------------------------------------------------------------
+|==========================================================================
+| ADMIN — CATEGORIES
+|==========================================================================
 */
-Route::post('/admin/bookings/{id}/confirm', function ($id, SupabaseService $supabase) {
-
-    $supabase->updateBooking($id, [
-    'status' => 'confirmed'
-]);
-
-$supabase->updateRoom($booking['room_uuid'], [
-    'status' => 'reserved'
-]);
-
-    $supabase->syncRoomStatus($booking['room_uuid']);
-
-    return back()->with('success', 'Booking confirmed');
-});
-
-/*
-|--------------------------------------------------------------------------
-| CHECK-IN BOOKING
-|--------------------------------------------------------------------------
-*/
-Route::post('/admin/bookings/{id}/checkin', function (
-    $id,
-    SupabaseService $supabase
-) {
-
-    $booking = collect($supabase->getBookings())
-        ->firstWhere('id', $id);
-
-    if (!$booking) {
-        return back()->with('error', 'Booking not found');
-    }
-
-    if (($booking['payment_status'] ?? '') !== 'fully_paid') {
-        return back()->with('error', 'Must be fully paid');
-    }
-
-    $supabase->updateBooking($id, [
-        'status' => 'checked_in'
-    ]);
-
-    $supabase->updateRoom($booking['room_uuid'], [
-        'status' => 'occupied'
-    ]);
-
-    $supabase->syncRoomStatus($booking['room_uuid']);
-
-    return back()->with('success', 'Checked in');
-});
-
-/*
-|--------------------------------------------------------------------------
-| CHECK-OUT BOOKING
-|--------------------------------------------------------------------------
-*/
-Route::post('/admin/bookings/{id}/checkout', function (
-    $id,
-    SupabaseService $supabase
-) {
-
-    $booking = collect($supabase->getBookings())
-        ->firstWhere('id', $id);
-
-    $supabase->updateBooking($id, [
-        'status' => 'checked_out'
-    ]);
-
-    $supabase->updateRoom($booking['room_uuid'], [
-        'status' => 'available'
-    ]);
-
-    $supabase->syncRoomStatus($booking['room_uuid']);
-
-    return back()->with('success', 'Checked out');
-});
-
-Route::get('/book-category/{categoryId}', function (
-    $categoryId,
-    SupabaseService $supabase
-) {
-
-    $categories = collect($supabase->getRoomCategories());
-    $rooms = collect($supabase->getRooms());
-
-    // 🔥 GET CATEGORY (SOURCE OF TRUTH)
-    $category = $categories->firstWhere('id', $categoryId);
-
-    if (!$category) {
-        abort(404);
-    }
-
-    // 🔥 FORCE PRICE FROM CATEGORY (NO FALLBACK 0)
-    if (!isset($category['price']) || $category['price'] <= 0) {
-        return back()->with('error', 'Category price not set');
-    }
-
-    $price = (float) $category['price'];
-
-    // pick room under category
-    $room = $rooms->firstWhere('category_id', $categoryId);
-
-    if (!$room) {
-        return back()->with('error', 'No room found');
-    }
-
-    $room['price'] = $price;
-    $room['category_name'] = $category['name'];
-
-    $room['downpayment'] = $price * 0.5;
-    $room['balance'] = $price * 0.5;
-
-    return view('book-category', compact('room'));
-});
-
-
-/*
-|--------------------------------------------------------------------------
-| ADMIN ROOMS CATEGORY
-|--------------------------------------------------------------------------
-*/
-
 
 Route::get('/admin/categories', function (SupabaseService $supabase) {
-
+    if ($r = adminGuard()) return $r;
     $categories = collect($supabase->getRoomCategories());
-
     return view('admin.categories', compact('categories'));
 });
 
 Route::post('/admin/categories/create', function (Request $request, SupabaseService $supabase) {
-
+    if ($r = adminGuard()) return $r;
     $supabase->createRoomCategory([
-        'name' => $request->name,
-        'price' => (float) $request->price,
-        'description' => $request->description,
+        'name' => $request->name, 'price' => (float) $request->price, 'description' => $request->description ?? '',
     ]);
-
     return back()->with('success', 'Category created');
 });
 
-
-Route::post('/admin/categories/store', function (Request $request, SupabaseService $supabase) {
- 
-    $supabase->createRoomCategory([
-        'name' => $request->name,
-        'price' => $request->price
-    ]);
-
-    return back()->with('success', 'Category created successfully');
-});
-
 Route::get('/admin/categories/delete/{id}', function ($id, SupabaseService $supabase) {
-
-    // safety check: prevent delete if used by rooms
-    $rooms = collect($supabase->getRooms());
-
-    $used = $rooms->contains('category_id', $id);
-
-    if ($used) {
-        return back()->with('error', 'Cannot delete: category used by rooms');
-    }
-
+    if ($r = adminGuard()) return $r;
+    $used = collect($supabase->getRooms())->contains('category_id', $id);
+    if ($used) return back()->with('error', 'Cannot delete: category is used by rooms');
     $supabase->deleteRoomCategory($id);
-
     return back()->with('success', 'Category deleted');
 });
 
 Route::get('/admin/categories/edit/{id}', function ($id, SupabaseService $supabase) {
-
-    $categories = collect($supabase->getRoomCategories());
-
-    $category = $categories->firstWhere('id', $id);
-
-    if (!$category) {
-        return back()->with('error', 'Category not found');
-    }
-
+    if ($r = adminGuard()) return $r;
+    $category = collect($supabase->getRoomCategories())->firstWhere('id', $id);
+    if (!$category) return back()->with('error', 'Category not found');
     return view('admin.categories-edit', compact('category'));
 });
 
-Route::post('/admin/categories/update/{id}', function ($id, Illuminate\Http\Request $request, SupabaseService $supabase) {
-
+Route::post('/admin/categories/update/{id}', function ($id, Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
     $response = $supabase->updateRoomCategory($id, [
-        'name' => $request->name,
-        'price' => $request->price,
-        'description' => $request->description,
+        'name' => $request->name, 'price' => $request->price, 'description' => $request->description,
+    ]);
+    if (!$response) return back()->with('error', 'Update failed');
+    return redirect('/admin/categories')->with('success', 'Category updated successfully');
+});
+
+/*
+|==========================================================================
+| ADMIN — DAY TOURS
+|==========================================================================
+*/
+
+Route::get('/admin/day-tours', function (Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $status   = $request->get('status', 'all');
+    $date     = $request->get('date', '');
+    $dayTours = collect($supabase->getDayTours());
+    if ($status !== 'all') $dayTours = $dayTours->where('status', $status);
+    if ($date) $dayTours = $dayTours->where('visit_date', $date);
+    $today        = date('Y-m-d');
+    $todayTours   = collect($supabase->getDayTours())->where('visit_date', $today);
+    $todayGuests  = $todayTours->sum('guest_count');
+    $todayRevenue = $todayTours->where('payment_status', 'paid')->sum('total_amount');
+    return view('admin.day-tours', compact('dayTours', 'status', 'date', 'todayGuests', 'todayRevenue'));
+});
+
+Route::get('/admin/day-tours/walkin', function (SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $packages = $supabase->getDayTourPackages();
+    return view('admin.day-tour-walkin', compact('packages'));
+});
+
+Route::post('/admin/day-tours/walkin', function (Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $package = collect($supabase->getDayTourPackages())->firstWhere('id', $request->package_id);
+    if (!$package) return back()->with('error', 'Package not found.');
+
+    $guests         = (int) $request->guest_count;
+    $pricePerPerson = (float) $package['price_per_person'];
+    $total          = $pricePerPerson * $guests;
+    $cash           = (float) $request->cash_received;
+
+    if ($guests <= 0) return back()->with('error', 'Invalid guest count.');
+    if ($cash < 0)    return back()->with('error', 'Invalid cash amount.');
+
+    if ($cash >= $total)      { $paymentStatus = 'paid';    $paidAmount = $total; $balance = 0; }
+    elseif ($cash > 0)        { $paymentStatus = 'partial'; $paidAmount = $cash;  $balance = $total - $cash; }
+    else                      { $paymentStatus = 'unpaid';  $paidAmount = 0;      $balance = $total; }
+
+    $response = $supabase->createDayTour([
+        'package_id'       => $package['id'],
+        'package_name'     => $package['name'],
+        'price_per_person' => $pricePerPerson,
+        'guest_count'      => $guests,
+        'total_amount'     => $total,
+        'paid_amount'      => $paidAmount,
+        'balance_amount'   => $balance,
+        'full_name'        => $request->full_name,
+        'phone'            => $request->phone,
+        'email'            => $request->email ?? null,
+        'visit_date'       => date('Y-m-d'),
+        'notes'            => $request->notes ?? null,
+        'status'           => 'confirmed',
+        'payment_status'   => $paymentStatus,
+        'type'             => 'walk_in',
     ]);
 
-    if (!$response) {
-        return back()->with('error', 'Update failed');
+    if (!$response) return back()->with('error', 'Failed to create day tour.');
+
+    $supabase->log('day_tour_created', [
+        'target_type'  => 'day_tour',
+        'target_label' => $request->full_name . ' — ' . $package['name'] . ' (' . $guests . ' guests)',
+        'amount'       => $paidAmount,
+        'payment_type' => $paymentStatus !== 'unpaid' ? $paymentStatus : null,
+    ]);
+
+    if ($paidAmount > 0) {
+        $supabase->recordPayment([
+            'target_type'     => 'day_tour',
+            'target_id'       => $response[0]['id'] ?? '',
+            'guest_name'      => $request->full_name,
+            'room_info'       => $package['name'] . ' — ' . $guests . ' guest(s)',
+            'amount_received' => $paidAmount,
+            'payment_type'    => $paymentStatus,
+            'payment_method'  => 'cash',
+            'total_amount'    => $total,
+            'balance_after'   => $balance,
+        ]);
     }
 
-    return redirect('/admin/categories')
-        ->with('success', 'Category updated successfully');
+    return redirect('/admin/day-tours')->with('success', 'Walk-in day tour created!');
 });
 
-/*
-|--------------------------------------------------------------------------
-| PAYMENT ROUTE (#)
-|--------------------------------------------------------------------------
-*/
-Route::get('/admin/bookings/payment/{id}', function ($id, App\Services\SupabaseService $supabase) {
-
-    $booking = collect($supabase->getBookings())
-        ->firstWhere('id', $id);
-
-    if (!$booking) {
-        return back()->with('error', 'Booking not found');
-    }
-
-    return view('admin.payment', compact('booking'));
+Route::get('/admin/day-tours/confirm/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $tour = $supabase->getDayTourById($id);
+    if (!$tour) return back()->with('error', 'Day tour not found.');
+    $supabase->updateDayTour($id, ['status' => 'confirmed']);
+    $supabase->log('day_tour_created', ['target_type' => 'day_tour', 'target_id' => $id, 'target_label' => ($tour['full_name'] ?? '') . ' — confirmed']);
+    return back()->with('success', 'Day tour confirmed.');
 });
-/*
-|--------------------------------------------------------------------------
-| PAYMENT LOGIC ROUTE (#)
-|--------------------------------------------------------------------------
-*/
-Route::post('/admin/bookings/payment/{id}', function ($id, Illuminate\Http\Request $request, App\Services\SupabaseService $supabase) {
 
-    $booking = collect($supabase->getBookings())
-        ->firstWhere('id', $id);
+Route::get('/admin/day-tours/payment/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $tour = $supabase->getDayTourById($id);
+    if (!$tour) return back()->with('error', 'Day tour not found.');
+    return view('admin.day-tour-payment', compact('tour'));
+});
 
-    if (!$booking) {
-        return back()->with('error', 'Booking not found');
-    }
+Route::post('/admin/day-tours/payment/{id}', function ($id, Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $tour = $supabase->getDayTourById($id);
+    if (!$tour) return back()->with('error', 'Day tour not found.');
 
-    $cash = (float) $request->cash_received;
-    $total = $booking['total_amount'];
-    $alreadyPaid = $booking['paid_amount'] ?? 0;
-    $balance = $total - $alreadyPaid;
+    $cash        = (float) $request->cash_received;
+    $total       = (float) $tour['total_amount'];
+    $alreadyPaid = (float) ($tour['paid_amount'] ?? 0);
+    $balance     = $total - $alreadyPaid;
+    $newBalance  = 0;
 
-    $cashReceived = (float) $request->cash_received;
+    if ($cash <= 0) return back()->with('error', 'Invalid cash amount.');
 
-    $newPaid = $alreadyPaid + $cashReceived;
-    $newBalance = $total - $newPaid;
-
-    if ($newBalance <= 0) {
-        $payment_status = 'paid';
+    if ($request->payment_type === 'full') {
+        if ($cash < $balance) return back()->with('error', 'Insufficient cash. Balance is ₱' . number_format($balance, 2));
+        $supabase->updateDayTour($id, ['paid_amount' => $total, 'balance_amount' => 0, 'payment_status' => 'paid', 'status' => 'confirmed']);
         $newBalance = 0;
     } else {
-        $payment_status = 'partial';
+        $newPaid    = $alreadyPaid + $cash;
+        $newBalance = max(0, $total - $newPaid);
+        $supabase->updateDayTour($id, [
+            'paid_amount'    => $newPaid,
+            'balance_amount' => $newBalance,
+            'payment_status' => $newBalance <= 0 ? 'paid' : 'partial',
+            'status'         => 'confirmed',
+        ]);
     }
 
+    $supabase->log('day_tour_payment', [
+        'target_type'  => 'day_tour',
+        'target_id'    => $id,
+        'target_label' => ($tour['full_name'] ?? '') . ' — ' . ($tour['package_name'] ?? '') . ' (' . ($tour['guest_count'] ?? 0) . ' guests)',
+        'amount'       => $cash,
+        'payment_type' => $request->payment_type,
+    ]);
+
+    $supabase->recordPayment([
+        'target_type'     => 'day_tour',
+        'target_id'       => $id,
+        'guest_name'      => $tour['full_name']    ?? '',
+        'room_info'       => ($tour['package_name'] ?? '') . ' — ' . ($tour['guest_count'] ?? 0) . ' guest(s)',
+        'amount_received' => $cash,
+        'payment_type'    => $request->payment_type,
+        'payment_method'  => 'cash',
+        'total_amount'    => $total,
+        'balance_after'   => $newBalance,
+    ]);
+
+    return redirect('/admin/day-tours')->with('success', 'Payment updated.');
+});
+
+Route::get('/admin/day-tours/cancel/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $tour = $supabase->getDayTourById($id);
+    if (!$tour) return back()->with('error', 'Day tour not found.');
+    if ($tour['payment_status'] === 'paid') return back()->with('error', 'Cannot cancel a fully paid tour.');
+    $supabase->updateDayTour($id, ['status' => 'cancelled']);
+    $supabase->log('booking_cancelled', ['target_type' => 'day_tour', 'target_id' => $id, 'target_label' => $tour['full_name'] ?? '']);
+    return back()->with('success', 'Day tour cancelled.');
+});
+
+Route::get('/admin/day-tour-packages', function (SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $packages = collect($supabase->getDayTourPackages());
+    return view('admin.day-tour-packages', compact('packages'));
+});
+
+Route::post('/admin/day-tour-packages/create', function (Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    if ((float)$request->price_per_person <= 0) return back()->with('error', 'Price must be greater than 0.');
+    $supabase->createDayTourPackage([
+        'name' => $request->name, 'description' => $request->description ?? '',
+        'price_per_person' => (float) $request->price_per_person, 'inclusions' => $request->inclusions ?? '',
+    ]);
+    return back()->with('success', 'Package created.');
+});
+
+Route::post('/admin/day-tour-packages/update/{id}', function ($id, Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $supabase->updateDayTourPackage($id, [
+        'name' => $request->name, 'description' => $request->description ?? '',
+        'price_per_person' => (float) $request->price_per_person, 'inclusions' => $request->inclusions ?? '',
+    ]);
+    return back()->with('success', 'Package updated.');
+});
+
+Route::get('/admin/day-tour-packages/delete/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $supabase->deleteDayTourPackage($id);
+    return back()->with('success', 'Package deleted.');
+});
+
+/*
+|==========================================================================
+| ADMIN — STAFF MANAGEMENT
+|==========================================================================
+*/
+
+Route::get('/admin/staff', function (SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    if (session('admin_role') !== 'admin') return redirect('/admin/dashboard')->with('error', 'Access denied.');
+    $staff = collect($supabase->getStaff());
+    return view('admin.staff', compact('staff'));
+});
+
+Route::post('/admin/staff/create', function (Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    if (session('admin_role') !== 'admin') return redirect('/admin/dashboard');
+    if (strlen($request->password) < 6) return back()->with('error', 'Password must be at least 6 characters.');
+    $response = $supabase->createStaff([
+        'full_name' => $request->full_name, 'email' => $request->email,
+        'password' => $request->password,   'role'  => $request->role,
+    ]);
+    if (!$response) return back()->with('error', 'Failed to create staff. Email may already exist.');
+    $supabase->log('staff_created', ['target_type' => 'staff', 'target_label' => $request->full_name . ' (' . $request->role . ')']);
+    return back()->with('success', 'Staff account created.');
+});
+
+Route::post('/admin/staff/update/{id}', function ($id, Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    if (session('admin_role') !== 'admin') return redirect('/admin/dashboard');
+    $data = ['full_name' => $request->full_name, 'email' => $request->email, 'role' => $request->role];
+    if (!empty($request->password)) {
+        if (strlen($request->password) < 6) return back()->with('error', 'Password must be at least 6 characters.');
+        $data['password'] = $request->password;
+    }
+    $supabase->updateStaff($id, $data);
+    $supabase->log('staff_updated', ['target_type' => 'staff', 'target_id' => $id, 'target_label' => $request->full_name]);
+    return back()->with('success', 'Staff updated.');
+});
+
+Route::get('/admin/staff/toggle/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    if (session('admin_role') !== 'admin') return redirect('/admin/dashboard');
+    if ($id == session('admin_id')) return back()->with('error', 'You cannot deactivate your own account.');
+    $staff = $supabase->getStaffById($id);
+    if (!$staff) return back()->with('error', 'Staff not found.');
+    $newStatus = !$staff['is_active'];
+    $supabase->toggleStaffActive($id, $newStatus);
+    $supabase->log($newStatus ? 'staff_activated' : 'staff_deactivated', ['target_type' => 'staff', 'target_id' => $id, 'target_label' => $staff['full_name']]);
+    return back()->with('success', 'Staff status updated.');
+});
+
+Route::get('/admin/staff/delete/{id}', function ($id, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    if (session('admin_role') !== 'admin') return redirect('/admin/dashboard');
+    if ($id == session('admin_id')) return back()->with('error', 'You cannot delete your own account.');
+    $staff = $supabase->getStaffById($id);
+    $supabase->deleteStaff($id);
+    $supabase->log('staff_deleted', ['target_type' => 'staff', 'target_id' => $id, 'target_label' => $staff['full_name'] ?? 'Unknown']);
+    return back()->with('success', 'Staff deleted.');
+});
+
+/*
+|==========================================================================
+| ADMIN — AUDIT LOG
+|==========================================================================
+*/
+
+Route::get('/admin/audit-log', function (Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    if (session('admin_role') !== 'admin') return redirect('/admin/dashboard')->with('error', 'Access denied.');
+    $filters = ['staff_id' => $request->staff_id, 'action' => $request->action, 'date' => $request->date];
+    $logs    = collect($supabase->getAuditLogs($filters));
+    $staff   = collect($supabase->getStaff());
+    return view('admin.audit-log', compact('logs', 'staff', 'filters'));
+});
+
+/*
+|==========================================================================
+| ADMIN — PAYMENT RECORDS
+|==========================================================================
+*/
+
+Route::get('/admin/payments', function (Request $request, SupabaseService $supabase) {
+    if ($r = adminGuard()) return $r;
+    $filters = [
+        'staff_id'    => $request->staff_id,
+        'target_type' => $request->type,
+        'date'        => $request->date ?? date('Y-m-d'),
+    ];
+    $payments        = collect($supabase->getPaymentRecords($filters));
+    $staff           = collect($supabase->getStaff());
+    $totalReceived   = $payments->sum('amount_received');
+    $bookingPayments = $payments->where('target_type', 'booking')->sum('amount_received');
+    $dayTourPayments = $payments->where('target_type', 'day_tour')->sum('amount_received');
+    $perStaff        = $payments->groupBy('staff_name')->map(fn($p) => ['count' => $p->count(), 'total' => $p->sum('amount_received')]);
+    return view('admin.payments', compact('payments', 'staff', 'filters', 'totalReceived', 'bookingPayments', 'dayTourPayments', 'perStaff'));
+});
+
+
+/*
+|==========================================================================
+| EQUIPMENT RENTAL ROUTES — Add to web.php
+|==========================================================================
+|
+| Walk-in Equipment Rental:
+| - /admin/equipment/walkin — form to create rental
+| - /admin/equipment/rentals — list of active rentals
+| - /admin/equipment/returns/{id} — return inspection page
+| - /admin/equipment/payment/{id} — payment page
+|
+| Management:
+| - /admin/equipment-types — manage chairs/tables prices
+| - /admin/cottages — manage cottage prices
+|
+*/
+
+
+
+/*
+|==========================================================================
+| EQUIPMENT WALK-IN RENTAL
+|==========================================================================
+*/
+
+Route::get('/admin/equipment/walkin', function (SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $equipmentTypes = collect($supabase->getEquipmentTypes());
+    $cottages       = collect($supabase->getCottages());
+
+    return view('admin.equipment-walkin', compact('equipmentTypes', 'cottages'));
+});
+
+Route::get('/admin/equipment/walkin', function (SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $equipmentTypes = $supabase->getEquipmentTypes();
+    $cottages = $supabase->getCottages();
+
+    return view('admin.equipment-walkin', compact('equipmentTypes', 'cottages'));
+});
+
+Route::post('/admin/equipment/walkin', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    // VALIDATION
+    $request->validate([
+        'guest_name'   => 'required|string|max:255',
+        'phone'        => 'required|string|max:20',
+        'rental_date'  => 'required|date',
+        'return_date'  => 'required|date|after:rental_date',
+    ]);
+
+    $guestName = $request->guest_name;
+    $phone = $request->phone;
+    $email = $request->email ?? null;
+    $rentalDate = $request->rental_date;
+    $returnDate = $request->return_date;
+
+    // Calculate days
+    $startDate = new DateTime($rentalDate);
+    $endDate = new DateTime($returnDate);
+    $days = $endDate->diff($startDate)->days;
+    if ($days == 0) $days = 1;
+
+    // ========================================================================
+    // COLLECT ITEMS & VALIDATE AVAILABILITY
+    // ========================================================================
+    $items = [];
+    $totalAmount = 0;
+
+    // EQUIPMENT (Chairs, Tables)
+    if ($request->has('equipment')) {
+        foreach ($request->equipment as $equipmentId => $quantity) {
+            $quantity = (int)$quantity;
+            if ($quantity <= 0) continue;
+
+            // GET EQUIPMENT
+            $equipment = $supabase->getEquipmentTypeById($equipmentId);
+            if (!$equipment) {
+                return back()->with('error', 'Equipment not found');
+            }
+
+            // CHECK AVAILABILITY ✅ THIS IS THE FIX
+            $available = (int)($equipment['quantity_available'] ?? 0);
+            if ($available < $quantity) {
+                return back()->with('error', 
+                    $equipment['name'] . ' only has ' . $available . ' available, requested ' . $quantity
+                );
+            }
+
+            // Calculate subtotal
+            $unitPrice = (float)($equipment['unit_price'] ?? 0);
+            $subtotal = $unitPrice * $quantity * $days;
+
+            $items[] = [
+                'item_type'  => 'equipment',
+                'item_id'    => $equipmentId,
+                'item_name'  => $equipment['name'],
+                'quantity'   => $quantity,
+                'unit_price' => $unitPrice,
+                'days'       => $days,
+                'subtotal'   => $subtotal,
+            ];
+
+            $totalAmount += $subtotal;
+        }
+    }
+
+    // COTTAGES
+    if ($request->has('cottages')) {
+        foreach ($request->cottages as $cottageId => $quantity) {
+            $quantity = (int)$quantity;
+            if ($quantity <= 0) continue;
+
+            // GET COTTAGE
+            $cottage = $supabase->getCottageById($cottageId);
+            if (!$cottage) {
+                return back()->with('error', 'Cottage not found');
+            }
+
+            // CHECK AVAILABILITY
+            $available = (int)($cottage['quantity_available'] ?? 0);
+            if ($available < $quantity) {
+                return back()->with('error',
+                    $cottage['name'] . ' only has ' . $available . ' available, requested ' . $quantity
+                );
+            }
+
+            // Calculate subtotal
+            $pricePerDay = (float)($cottage['price_per_day'] ?? 0);
+            $subtotal = $pricePerDay * $quantity * $days;
+
+            $items[] = [
+                'item_type'  => 'cottage',
+                'item_id'    => $cottageId,
+                'item_name'  => $cottage['name'],
+                'quantity'   => $quantity,
+                'unit_price' => $pricePerDay,
+                'days'       => $days,
+                'subtotal'   => $subtotal,
+            ];
+
+            $totalAmount += $subtotal;
+        }
+    }
+
+    // CHECK IF ITEMS EXIST
+    if (empty($items)) {
+        return back()->with('error', 'Please select at least one item to rent');
+    }
+
+    // ========================================================================
+    // CREATE RENTAL
+    // ========================================================================
+    $response = $supabase->createEquipmentRental([
+        'guest_name'     => $guestName,
+        'phone'          => $phone,
+        'email'          => $email,
+        'rental_date'    => $rentalDate,
+        'return_date'    => $returnDate,
+        'days'           => $days,
+        'total_amount'   => $totalAmount,
+        'paid_amount'    => 0,
+        'balance_amount' => $totalAmount,
+        'payment_status' => 'unpaid',
+        'status'         => 'active',
+    ]);
+
+    if (!$response || empty($response)) {
+        return back()->with('error', 'Failed to create rental');
+    }
+
+    $rentalId = $response[0]['id'];
+
+    // ========================================================================
+    // ADD ITEMS & DEDUCT INVENTORY ✅
+    // ========================================================================
+    foreach ($items as $item) {
+        // Add rental item
+        $supabase->addRentalItem($rentalId, $item);
+
+        // DEDUCT INVENTORY ✅
+        if ($item['item_type'] === 'equipment') {
+            $supabase->deductEquipmentInventory($item['item_id'], $item['quantity']);
+        } elseif ($item['item_type'] === 'cottage') {
+            $supabase->deductEquipmentInventory($item['item_id'], $item['quantity']);
+        }
+    }
+
+    // LOG ACTION
+    $supabase->log('equipment_rental_created', [
+        'target_type'  => 'equipment_rental',
+        'target_id'    => $rentalId,
+        'target_label' => $guestName . ' — ' . count($items) . ' item(s)',
+        'amount'       => $totalAmount,
+    ]);
+
+    return redirect("/admin/equipment/rentals?tab=recent")
+        ->with('success', 'Rental created! ₱' . number_format($totalAmount, 2));
+});
+
+/*
+|==========================================================================
+| RENTAL LIST
+|==========================================================================
+*/
+
+Route::get('/admin/equipment/rentals', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    // GET FILTERS
+    $status = $request->get('status', '');
+    $paymentStatus = $request->get('payment_status', '');
+
+    // GET ALL RENTALS
+    $allRentals = $supabase->getEquipmentRentals();
+
+    // FILTER BY STATUS
+    if ($status) {
+        $allRentals = array_filter($allRentals, function ($r) use ($status) {
+            return ($r['status'] ?? '') === $status;
+        });
+    }
+
+    // FILTER BY PAYMENT STATUS
+    if ($paymentStatus) {
+        $allRentals = array_filter($allRentals, function ($r) use ($paymentStatus) {
+            return ($r['payment_status'] ?? '') === $paymentStatus;
+        });
+    }
+
+    // GET ITEMS FOR EACH RENTAL ✅
+    $rentals = [];
+    foreach ($allRentals as $rental) {
+        $rental['items'] = $supabase->getRentalItems($rental['id']);
+        $rentals[] = $rental;
+    }
+
+    return view('admin.equipment-rentals', compact('rentals', 'supabase'));
+});
+
+
+/*
+|==========================================================================
+| PAYMENT PAGE
+|==========================================================================
+*/
+
+Route::get('/admin/equipment/payment/{id}', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $rental = $supabase->getEquipmentRentalById($id);
+    if (!$rental) return back()->with('error', 'Rental not found.');
+
+    $rental['items'] = $supabase->getRentalItems($id);
+
+    return view('admin.equipment-payment', compact('rental'));
+});
+
+
+
+/*
+|==========================================================================
+| EQUIPMENT PAYMENT ROUTE - CASH ONLY, FULL PAYMENT ONLY
+|==========================================================================
+*/
+
+
+Route::get('/admin/equipment/payment/{id}', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $rental = $supabase->getEquipmentRentalById($id);
+    if (!$rental) return back()->with('error', 'Rental not found');
+
+    return view('admin.equipment-payment', compact('rental', 'supabase'));
+});
+
+Route::post('/admin/equipment/payment/{id}', function ($id, Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    // VALIDATE
+    $validated = $request->validate([
+        'cash_received' => 'required|numeric|min:0.01',
+    ]);
+
+    // GET RENTAL
+    $rental = $supabase->getEquipmentRentalById($id);
+    if (!$rental) {
+        return back()->withErrors(['payment' => 'Rental not found']);
+    }
+
+    $cash = (float)$validated['cash_received'];
+    $total = (float)($rental['total_amount'] ?? 0);
+    $alreadyPaid = (float)($rental['paid_amount'] ?? 0);
+    $balance = $total - $alreadyPaid;
+
+    // VALIDATE AMOUNT - MUST BE FULL PAYMENT
     if ($cash <= 0) {
-        return back()->with('error', 'Invalid cash');
+        return back()->withErrors(['payment' => 'Cash received must be greater than 0']);
     }
 
-    // 💳 FULL PAYMENT
-    if ($request->payment_type === 'full') {
+    // FULL PAYMENT ONLY - NO PARTIAL
+    if ($cash < $balance) {
+        return back()->withErrors(['payment' => 'Must pay full balance of ₱' . number_format($balance, 2)]);
+    }
 
-        if ($cashReceived < $balance) {
-    return back()->with('error', 'Insufficient cash. Remaining balance is ' . $balance);
-}
+    $newPaid = $total;
+    $newBalance = 0;
+    $newStatus = 'paid';
 
-        $supabase->updateBooking($id, [
-            'paid_amount' => $total,
-            'balance_amount' => 0,
-            'payment_status' => 'paid',
-            'status' => 'confirmed'
+    // ========================================================================
+    // UPDATE RENTAL — INCLUDE ALL REQUIRED FIELDS
+    // ========================================================================
+    $updateData = [
+        'guest_name'      => $rental['guest_name'],
+        'phone'           => $rental['phone'],
+        'email'           => $rental['email'],
+        'rental_date'     => $rental['rental_date'],
+        'return_date'     => $rental['return_date'],
+        'days'            => $rental['days'],
+        'total_amount'    => $rental['total_amount'],
+        'paid_amount'     => $newPaid,
+        'balance_amount'  => $newBalance,
+        'payment_status'  => $newStatus,
+        'status'          => $rental['status'],
+        'notes'           => $rental['notes'],
+    ];
+    
+    $updateResponse = $supabase->updateEquipmentRental($id, $updateData);
+    
+    if (!$updateResponse || empty($updateResponse)) {
+        return back()->withErrors(['payment' => 'Failed to update payment. Try again.']);
+    }
+
+    // ========================================================================
+    // RECORD PAYMENT IN payment_records TABLE
+    // ========================================================================
+    $paymentResponse = $supabase->recordPayment([
+        'target_type'     => 'equipment_rental',
+        'target_id'       => (string)$id,
+        'guest_name'      => $rental['guest_name'] ?? 'Unknown',
+        'room_info'       => 'Equipment rental - Full',
+        'amount_received' => $cash,
+        'payment_type'    => 'full',
+        'payment_method'  => 'cash',
+        'total_amount'    => $total,
+        'balance_after'   => 0,
+    ]);
+
+    // ========================================================================
+    // LOG ACTION
+    // ========================================================================
+    $supabase->log('equipment_payment_received', [
+        'target_type'  => 'equipment_rental',
+        'target_id'    => (string)$id,
+        'target_label' => $rental['guest_name'] . ' — ₱' . number_format($cash, 2) . ' (cash)',
+        'amount'       => $cash,
+        'payment_type' => 'full',
+    ]);
+
+    return redirect('/admin/equipment/rentals')
+        ->with('success', '✅ Full payment recorded! ₱' . number_format($cash, 2) . ' (cash)');
+});
+
+
+
+/*
+|==========================================================================
+| RETURN INSPECTION
+|==========================================================================
+*/
+
+Route::get('/admin/equipment/return/{id}', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $rental = $supabase->getEquipmentRentalById($id);
+    if (!$rental) return back()->with('error', 'Rental not found.');
+
+    $rental['items'] = $supabase->getRentalItems($id);
+    $rental['return'] = $supabase->getRentalReturn($id);
+
+    return view('admin.equipment-return', compact('rental', 'supabase'));
+});
+
+
+Route::post('/admin/equipment/return/{id}', function ($id, Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $rental = $supabase->getEquipmentRentalById($id);
+    if (!$rental) {
+        return back()->withErrors(['return' => 'Rental not found.']);
+    }
+
+    // VALIDATE
+    $validated = $request->validate([
+        'returned_date' => 'nullable|date',
+        'returned_time' => 'nullable|string',
+        'condition'     => 'required|in:good,damaged,missing',
+        'damage_description' => 'nullable|string',
+        'damage_amount' => 'nullable|numeric|min:0',
+        'notes'         => 'nullable|string',
+    ]);
+
+    $items = $supabase->getRentalItems($id);
+    $damageAmount = (float)($validated['damage_amount'] ?? 0);
+
+    // ========================================================================
+    // CHECK IF RETURN ALREADY RECORDED
+    // ========================================================================
+    $existingReturn = $supabase->getRentalReturn($id);
+
+    if ($existingReturn) {
+        // UPDATE EXISTING RETURN
+        $updateReturn = $supabase->updateRentalReturn($existingReturn['id'], [
+            'condition'          => $validated['condition'] ?? 'good',
+            'damage_description' => $validated['damage_description'] ?? null,
+            'damage_amount'      => $damageAmount,
+            'notes'              => $validated['notes'] ?? null,
+        ]);
+
+        if (!$updateReturn) {
+            return back()->withErrors(['return' => 'Failed to update return record']);
+        }
+    } else {
+        // CREATE NEW RETURN RECORD
+        $createReturn = $supabase->recordRentalReturn($id, [
+            'returned_date'      => $validated['returned_date'] ?? date('Y-m-d'),
+            'returned_time'      => $validated['returned_time'] ?? null,
+            'condition'          => $validated['condition'] ?? 'good',
+            'damage_description' => $validated['damage_description'] ?? null,
+            'damage_amount'      => $damageAmount,
+            'notes'              => $validated['notes'] ?? null,
+            'returned_by'        => $request->returned_by ?? null,
+        ]);
+
+        if (!$createReturn) {
+            return back()->withErrors(['return' => 'Failed to create return record']);
+        }
+    }
+
+    // ========================================================================
+    // RESTORE INVENTORY when equipment is returned ✅
+    // ========================================================================
+    foreach ($items as $item) {
+        if ($item['item_type'] === 'equipment') {
+            $supabase->restoreEquipmentInventory($item['item_id'], $item['quantity']);
+        }
+    }
+
+    // ========================================================================
+    // IF THERE ARE DAMAGES, UPDATE BALANCE
+    // ========================================================================
+    if ($damageAmount > 0) {
+        $newBalance = (float)($rental['balance_amount'] ?? 0) + $damageAmount;
+        
+        $updateBalanceData = [
+            'guest_name'      => $rental['guest_name'],
+            'phone'           => $rental['phone'],
+            'email'           => $rental['email'],
+            'rental_date'     => $rental['rental_date'],
+            'return_date'     => $rental['return_date'],
+            'days'            => $rental['days'],
+            'total_amount'    => $rental['total_amount'],
+            'paid_amount'     => $rental['paid_amount'],
+            'balance_amount'  => $newBalance,
+            'payment_status'  => $newBalance > 0 ? 'partial' : 'paid',
+            'status'          => 'returned',
+            'notes'           => $rental['notes'],
+        ];
+
+        $supabase->updateEquipmentRental($id, $updateBalanceData);
+
+        $supabase->log('equipment_damage_recorded', [
+            'target_type'  => 'equipment_rental',
+            'target_id'    => $id,
+            'target_label' => $rental['guest_name'] . ' — Damage charge: ₱' . number_format($damageAmount, 2),
+            'amount'       => $damageAmount,
+        ]);
+    } else {
+        // NO DAMAGES - JUST UPDATE STATUS
+        $updateStatusData = [
+            'guest_name'      => $rental['guest_name'],
+            'phone'           => $rental['phone'],
+            'email'           => $rental['email'],
+            'rental_date'     => $rental['rental_date'],
+            'return_date'     => $rental['return_date'],
+            'days'            => $rental['days'],
+            'total_amount'    => $rental['total_amount'],
+            'paid_amount'     => $rental['paid_amount'],
+            'balance_amount'  => $rental['balance_amount'],
+            'payment_status'  => $rental['payment_status'],
+            'status'          => 'returned',
+            'notes'           => $rental['notes'],
+        ];
+
+        $supabase->updateEquipmentRental($id, $updateStatusData);
+    }
+
+    // ========================================================================
+    // LOG THE RETURN
+    // ========================================================================
+    $supabase->log('equipment_rental_returned', [
+        'target_type'  => 'equipment_rental',
+        'target_id'    => $id,
+        'target_label' => $rental['guest_name'] . ' — ' . count($items) . ' item(s) returned (' . ($validated['condition'] ?? 'good') . ')',
+    ]);
+
+    return redirect('/admin/equipment/rentals')
+        ->with('success', '✅ Return inspection recorded + inventory restored! Items: ' . count($items));
+});
+/*
+|==========================================================================
+| EQUIPMENT TYPES MANAGEMENT (Chairs, Tables)
+|==========================================================================
+*/
+
+Route::get('/admin/equipment-types', function (SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $equipmentTypes = collect($supabase->getEquipmentTypes());
+
+    return view('admin.equipment-types', compact('equipmentTypes'));
+});
+
+Route::post('/admin/equipment-types/create', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $supabase->createEquipmentType([
+        'name'                 => $request->name,
+        'unit_price'           => (float)$request->unit_price,
+        'quantity_available'   => (int)$request->quantity_available,
+        'is_active'            => true,
+    ]);
+
+    return back()->with('success', 'Equipment type created.');
+});
+
+Route::post('/admin/equipment-types/update/{id}', function ($id, Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $supabase->updateEquipmentType($id, [
+        'name'                 => $request->name,
+        'unit_price'           => (float)$request->unit_price,
+        'quantity_available'   => (int)$request->quantity_available,
+    ]);
+
+    return back()->with('success', 'Equipment type updated.');
+});
+
+/*
+|==========================================================================
+| COTTAGES MANAGEMENT
+|==========================================================================
+*/
+
+Route::get('/admin/cottages', function (SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $cottages = collect($supabase->getCottages());
+
+    return view('admin.cottages', compact('cottages'));
+});
+
+Route::post('/admin/cottages/create', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $supabase->createCottage([
+        'name'               => $request->name,
+        'size_category'      => $request->size_category,
+        'price_per_day'      => (float)$request->price_per_day,
+        'quantity_available' => 1,
+        'description'        => $request->description ?? null,
+        'is_active'          => true,
+    ]);
+
+    return back()->with('success', 'Cottage added.');
+});
+
+Route::post('/admin/cottages/update/{id}', function ($id, Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $supabase->updateCottage($id, [
+        'name'               => $request->name,
+        'size_category'      => $request->size_category,
+        'price_per_day'      => (float)$request->price_per_day,
+        'description'        => $request->description ?? null,
+    ]);
+
+    return back()->with('success', 'Cottage updated.');
+});
+
+Route::get('/admin/cottages/delete/{id}', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $supabase->deleteCottage($id);
+
+    return back()->with('success', 'Cottage deleted.');
+});
+
+/*
+|==========================================================================
+| CASHIER — SUBMIT DAILY PAYMENTS
+|==========================================================================
+*/
+
+Route::get('/admin/payment-submit', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $date = $request->get('date', date('Y-m-d'));
+    $staffId = session('admin_id');
+    
+    // Get all payments for this staff today
+    $allPayments = collect($supabase->getPaymentRecords());
+    $todayPayments = $allPayments->filter(function ($p) use ($date, $staffId) {
+        $pDate = date('Y-m-d', strtotime($p['received_at'] ?? now()));
+        return $pDate === $date && $p['staff_id'] == $staffId;
+    });
+
+    // Calculate totals
+    $totalCash = $todayPayments->sum('amount_received');
+    $paymentCount = $todayPayments->count();
+    
+    // Check if already submitted
+    $submitted = collect($supabase->getPaymentSubmissions([
+        'staff_id' => $staffId,
+        'date' => $date,
+    ]))->first();
+
+    return view('admin.payment-submit', compact(
+        'date', 'todayPayments', 'totalCash', 'paymentCount', 'submitted'
+    ));
+});
+
+Route::post('/admin/payment-submit', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $date = $request->get('date', date('Y-m-d'));
+    $staffId = session('admin_id');
+
+    // Get today's payments
+    $allPayments = collect($supabase->getPaymentRecords());
+    $todayPayments = $allPayments->filter(function ($p) use ($date, $staffId) {
+        $pDate = date('Y-m-d', strtotime($p['received_at'] ?? now()));
+        return $pDate === $date && $p['staff_id'] == $staffId;
+    });
+
+    if ($todayPayments->isEmpty()) {
+        return back()->with('error', 'No payments to submit for today.');
+    }
+
+    $totalCash = $todayPayments->sum('amount_received');
+    $paymentCount = $todayPayments->count();
+
+    // Create submission
+    $response = $supabase->createPaymentSubmission([
+        'staff_id'        => $staffId,
+        'staff_name'      => session('admin_name'),
+        'submission_date' => $date,
+        'total_cash'      => $totalCash,
+        'payment_count'   => $paymentCount,
+        'notes'           => $request->notes ?? null,
+    ]);
+
+    if (!$response || empty($response)) {
+        return back()->with('error', 'Submission failed.');
+    }
+
+    $submissionId = $response[0]['id'];
+
+    // Add payment items
+    foreach ($todayPayments as $payment) {
+        $supabase->addSubmissionItem($submissionId, [
+            'payment_record_id' => $payment['id'] ?? null,
+            'target_type'       => $payment['target_type'],
+            'target_id'         => $payment['target_id'],
+            'guest_name'        => $payment['guest_name'],
+            'amount'            => $payment['amount_received'],
         ]);
     }
 
-    // 💰 PARTIAL PAYMENT
-    if ($request->payment_type === 'partial') {
+    $supabase->log('payment_submission', [
+        'target_type'  => 'payment_submission',
+        'target_id'    => $submissionId,
+        'target_label' => 'Payment submission for ' . $date . ' — ₱' . number_format($totalCash, 2),
+        'amount'       => $totalCash,
+    ]);
 
-        $balance = $total - $cash;
+    return redirect('/admin/payment-submit')->with('success', 'Payment submission created! Awaiting admin approval.');
+});
 
-        $supabase->updateBooking($id, [
-            'paid_amount' => $cash,
-            'balance_amount' => $balance,
-            'payment_status' => 'partial',
-            'status' => 'confirmed'
-        ]);
-    }
+/*
+|==========================================================================
+| ADMIN — APPROVE/REJECT SUBMISSIONS
+|==========================================================================
+*/
 
-    return redirect('/admin/bookings')
-        ->with('success', 'Payment updated successfully');
+Route::get('/admin/payment-submissions', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    if (session('admin_role') !== 'admin') return redirect('/admin/dashboard');
+
+    $status = $request->get('status', 'pending');
+    $date = $request->get('date', '');
+
+    $filters = ['status' => $status];
+    if ($date) $filters['date'] = $date;
+
+    $submissions = collect($supabase->getPaymentSubmissions($filters));
+    $staff = collect($supabase->getStaff());
+
+    return view('admin.payment-submissions', compact('submissions', 'staff', 'status', 'date'));
+});
+
+Route::get('/admin/payment-submission/{id}', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    if (session('admin_role') !== 'admin') return redirect('/admin/dashboard');
+
+    $submission = $supabase->getPaymentSubmissionById($id);
+    if (!$submission) return back()->with('error', 'Not found');
+
+    $items = $supabase->getSubmissionItems($id);
+
+    return view('admin.payment-submission-detail', compact('submission', 'items'));
+});
+
+Route::post('/admin/payment-submission/{id}/approve', function ($id, Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    if (session('admin_role') !== 'admin') return redirect('/admin/dashboard');
+
+    $submission = $supabase->getPaymentSubmissionById($id);
+    if (!$submission) return back()->with('error', 'Not found');
+
+    $supabase->updatePaymentSubmission($id, [
+        'status'      => 'approved',
+        'admin_id'    => session('admin_id'),
+        'admin_name'  => session('admin_name'),
+        'approved_at' => now()->toISOString(),
+        'notes'       => $request->notes ?? null,
+    ]);
+
+    $supabase->log('payment_submission_approved', [
+        'target_type'  => 'payment_submission',
+        'target_id'    => $id,
+        'target_label' => $submission['staff_name'] . ' — ₱' . number_format($submission['total_cash'], 2) . ' APPROVED',
+        'amount'       => $submission['total_cash'],
+    ]);
+
+    return back()->with('success', 'Payment submission approved! ✅');
+});
+
+Route::post('/admin/payment-submission/{id}/reject', function ($id, Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    if (session('admin_role') !== 'admin') return redirect('/admin/dashboard');
+
+    $submission = $supabase->getPaymentSubmissionById($id);
+    if (!$submission) return back()->with('error', 'Not found');
+
+    $supabase->updatePaymentSubmission($id, [
+        'status'   => 'rejected',
+        'notes'    => $request->notes ?? null,
+    ]);
+
+    $supabase->log('payment_submission_rejected', [
+        'target_type'  => 'payment_submission',
+        'target_id'    => $id,
+        'target_label' => $submission['staff_name'] . ' — ₱' . number_format($submission['total_cash'], 2) . ' REJECTED',
+        'amount'       => $submission['total_cash'],
+    ]);
+
+    return back()->with('success', 'Payment submission rejected.');
+});
+
+/*
+|==========================================================================
+| REPORTS — Daily Remittance Report
+|==========================================================================
+*/
+
+Route::get('/admin/remittance-report', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    if (session('admin_role') !== 'admin') return redirect('/admin/dashboard');
+
+    $date = $request->get('date', date('Y-m-d'));
+
+    $submissions = collect($supabase->getPaymentSubmissions(['date' => $date]));
+    $staff = collect($supabase->getStaff());
+
+    // Summary
+    $totalSubmitted = $submissions->sum('total_cash');
+    $totalApproved = $submissions->where('status', 'approved')->sum('total_cash');
+    $totalPending = $submissions->where('status', 'pending')->sum('total_cash');
+    $approvedCount = $submissions->where('status', 'approved')->count();
+
+    return view('admin.remittance-report', compact(
+        'date', 'submissions', 'staff',
+        'totalSubmitted', 'totalApproved', 'totalPending', 'approvedCount'
+    ));
 });

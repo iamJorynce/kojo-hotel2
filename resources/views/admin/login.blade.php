@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Admin Login | Kojo Hotel</title>
+    <title>Admin Login | Sea Eagle Beach Resort</title>
 
     <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Poppins:wght@300;400;500&display=swap" rel="stylesheet">
 
@@ -119,7 +119,7 @@
         @csrf
 
         <div class="input-group">
-            <input type="email" name="email" placeholder="Email Address" required>
+            <input type="email" name="email" placeholder="Email Address" >
         </div>
 
         <div class="input-group">

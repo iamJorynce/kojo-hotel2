@@ -160,18 +160,16 @@
         }
 
         .hero-content {
-    position: relative;
-    z-index: 2;
-    padding: 20px;
-
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-
-    animation: fadeUp 1s 0.3s both;
-}
+            position: relative;
+            z-index: 2;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            animation: fadeUp 1s 0.3s both;
+        }
 
         @keyframes fadeUp {
             from { opacity: 0; transform: translateY(30px); }
@@ -263,15 +261,6 @@
             transition: background 0.2s;
             position: relative;
             overflow: hidden;
-        }
-
-        .search-btn::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background: white;
-            opacity: 0;
-            transition: opacity 0.2s;
         }
 
         .search-btn:hover { background: var(--ocean-mid); }
@@ -648,10 +637,28 @@
             pointer-events: none;
             animation: ripple 0.6s ease-out forwards;
         }
+
+        /* ─── ROOM CARD (homepage loop) ─── */
+        .room-card-home {
+            background: #fff;
+            border-radius: 14px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            opacity: 0;
+            transform: translateY(30px);
+        }
+
+        .room-card-home.visible {
+            animation: cardReveal 0.6s forwards;
+        }
+
+        .room-card-home:hover {
+            transform: translateY(-6px);
+            box-shadow: 0 16px 40px rgba(10,74,110,0.13);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
     </style>
 </head>
-
-
 
 <body>
 
@@ -662,9 +669,9 @@
     </a>
     <div class="nav-links">
         <a href="/">Home</a>
-        <a href="/">About us</a>
         <a href="/rooms">Rooms</a>
-        <a href="/">Contact us</a>
+        <a href="/day-tour">🏖 Day Tour</a>
+        <a href="/#contact">Contact</a>
         <a href="/admin/login" class="btn-admin">Admin</a>
     </div>
 </nav>
@@ -684,81 +691,61 @@
         <div class="hero-eyebrow">Pindasan, Mabini, Davao de Oro</div>
         <h1>Your <em>Perfect</em><br>Beach Escape</h1>
         <p style="text-align: center;">
-    Luxurious rooms, breathtaking views, and unforgettable memories await at Sea Eagle.
-</p>
+            Luxurious rooms, breathtaking views, and unforgettable memories await at Sea Eagle.
+        </p>
 
         <!-- SEARCH -->
-         @php
-        $today = date('Y-m-d');
-        @endphp
+        @php $today = date('Y-m-d'); @endphp
+
         <form action="/rooms" method="GET">
+            <div class="search-box" id="searchBox">
 
-    <div class="search-box" id="searchBox">
+                <div class="search-field">
+                    <label>Check In</label>
+                    <input type="date"
+                           name="check_in"
+                           id="check_in"
+                           min="{{ $today }}"
+                           required>
+                </div>
 
-        <div class="search-field">
-            <label>Check In</label>
-            <input type="date"
-                   name="check_in"
-                   min="{{ $today }}"
-                   required>
+                <div class="search-field">
+                    <label>Check Out</label>
+                    <input type="date"
+                           name="check_out"
+                           id="check_out"
+                           min="{{ $today }}"
+                           required>
+                </div>
+
+                <button type="submit" class="search-btn">
+                    Check&nbsp;Availability
+                </button>
+
+            </div>
+        </form>
+
+        <!-- DAY TOUR QUICK LINK -->
+        <div style="margin-top:18px;animation:fadeUp 1s 1.1s both;">
+            <a href="/day-tour" style="
+                display:inline-flex;
+                align-items:center;
+                gap:8px;
+                color:rgba(255,255,255,0.85);
+                font-size:14px;
+                text-decoration:none;
+                border:1px solid rgba(255,255,255,0.3);
+                padding:9px 20px;
+                border-radius:30px;
+                transition:all 0.2s;
+                backdrop-filter:blur(4px);
+            "
+            onmouseover="this.style.background='rgba(255,255,255,0.15)';this.style.color='white'"
+            onmouseout="this.style.background='transparent';this.style.color='rgba(255,255,255,0.85)'">
+                🏖 Day Tour — No overnight stay needed
+            </a>
         </div>
 
-        <div class="search-field">
-            <label>Check Out</label>
-            <input type="date"
-                   name="check_out"
-                   min="{{ $today }}"
-                   required>
-        </div>
-
-        <button type="submit" class="search-btn" onclick="addRipple(this, event)">
-            Check&nbsp;Availability
-        </button>
-
-        <script>
-            document.addEventListener("DOMContentLoaded", function () {
-
-                const checkIn = document.querySelector('input[name="check_in"]');
-                const checkOut = document.querySelector('input[name="check_out"]');
-
-                checkIn.addEventListener("change", function () {
-                    checkOut.min = checkIn.value;
-                });
-
-            });
-        </script>
-
-        <script>
-document.addEventListener("DOMContentLoaded", function () {
-
-    const checkIn = document.querySelector('input[name="check_in"]');
-    const checkOut = document.querySelector('input[name="check_out"]');
-
-    checkIn.addEventListener("change", function () {
-
-        // auto set minimum checkout date
-        checkOut.min = checkIn.value;
-
-        // clear invalid value
-        if (checkOut.value && checkOut.value <= checkIn.value) {
-            checkOut.value = "";
-        }
-    });
-
-    checkOut.addEventListener("change", function () {
-
-        if (checkOut.value <= checkIn.value) {
-            alert("Check-out must be AFTER check-in date!");
-            checkOut.value = "";
-        }
-    });
-
-});
-</script>
-
-    </div>
-
-</form>
     </div>
 
     <div class="scroll-hint">
@@ -783,80 +770,144 @@ document.addEventListener("DOMContentLoaded", function () {
 
         @foreach($categories as $category)
 
-    <h2 style="margin-top:30px;">
-        {{ $category['name'] }}
-    </h2>
+            @php
+                // use array access consistent with homepage controller
+                $categoryRooms = collect($rooms[$category['id']] ?? []);
+                $sampleRoom = $categoryRooms->first();
+            @endphp
 
-    @php
-        $categoryRooms = collect($rooms[$category['id']] ?? []);
-    @endphp
+            @if($sampleRoom)
 
-    <div style="
-        display:grid;
-        grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
-        gap:20px;
-        margin-top:10px;
-    ">
+                <h2 style="margin-top:30px; font-family:'Cormorant Garamond',serif; color:var(--dark);">
+                    {{ $category['name'] }}
+                </h2>
 
-        @foreach($categoryRooms->take(1) as $room)
-            <div style="
-                background:#fff;
-                border-radius:14px;
-                overflow:hidden;
-                box-shadow:0 4px 15px rgba(0,0,0,0.08);
-            ">
+                <div style="
+                    display:grid;
+                    grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+                    gap:20px;
+                    margin-top:10px;
+                ">
+                    <div class="room-card-home">
 
-                <!-- IMAGE (ONLY 1 PER ROOM) -->
-                <img src="{{ $room['image_url'] }}"
-                     style="width:100%;height:180px;object-fit:cover;">
+                        <img src="{{ $sampleRoom['image_url'] }}"
+                             alt="{{ $category['name'] }}"
+                             style="width:100%;height:180px;object-fit:cover;">
 
-                <div style="padding:15px;">
+                        <div style="padding:15px;">
 
-                    <!-- ROOM NAME -->
-                    <h3 style="margin:0;">
-                        {{ $room['name'] }}
-                    </h3>
+                            <h3 style="margin:0; font-family:'Cormorant Garamond',serif; font-size:20px; color:var(--dark);">
+                                {{ $category['name'] }}
+                            </h3>
 
-                    <!-- PRICE FROM CATEGORY -->
-                    <p style="color:#0a4a6e;font-weight:bold;margin:6px 0;">
-                        ₱{{ number_format($category['price'], 2) }} / night
-                    </p>
+                            <p style="color:var(--ocean);font-weight:bold;margin:6px 0;">
+                                ₱{{ number_format($category['price'], 2) }} / night
+                            </p>
 
-                    <!-- DESCRIPTION FROM CATEGORY -->
-                    <p style="color:#666;font-size:13px;">
-                        {{ $category['description'] ?? '' }}
-                    </p>
+                            <p style="color:#666;font-size:13px;">
+                                {{ $category['description'] ?? '' }}
+                            </p>
 
-                    <!-- BUTTON -->
-                    <a href="/book-category/{{ $category['id'] }}"
-                       style="
-                           display:inline-block;
-                           margin-top:10px;
-                           padding:8px 12px;
-                           background:#0a4a6e;
-                           color:#fff;
-                           border-radius:6px;
-                           text-decoration:none;
-                           font-size:13px;
-                       ">
-                        Book Now
-                    </a>
+                            <a href="/book-category/{{ $category['id'] }}{{ request('check_in') ? '?check_in='.request('check_in').'&check_out='.request('check_out') : '' }}"
+                               style="
+                                   display:inline-block;
+                                   margin-top:10px;
+                                   padding:8px 16px;
+                                   background:var(--ocean);
+                                   color:#fff;
+                                   border-radius:8px;
+                                   text-decoration:none;
+                                   font-size:13px;
+                                   font-weight:500;
+                               ">
+                                Book Now
+                            </a>
 
+                        </div>
+                    </div>
                 </div>
 
-            </div>
+            @endif
 
         @endforeach
 
     </div>
+</section>
 
-@endforeach
+<!-- DAY TOUR SECTION -->
+<section class="section" style="background: white;">
+    <div class="container">
+
+        <div class="section-label" style="color:#1a6b3c;">Day Tour</div>
+        <div class="section-title">Visit for a Day</div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px;">
+
+            <!-- BEACH ONLY -->
+            <div class="room-card-home" style="border-top:4px solid #0a4a6e;">
+                <div style="padding:28px 24px 20px;background:linear-gradient(135deg,#0a4a6e,#1a7a9e);color:white;">
+                    <div style="font-size:40px;margin-bottom:10px;">🏖</div>
+                    <h3 style="font-family:'Cormorant Garamond',serif;font-size:26px;font-weight:600;margin-bottom:6px;">Beach Access</h3>
+                    <p style="font-size:32px;font-weight:700;color:#f0d49a;">₱150 <span style="font-size:14px;font-weight:400;color:rgba(255,255,255,0.7);">/ person</span></p>
+                </div>
+                <div style="padding:20px 24px;">
+                    <ul style="list-style:none;margin-bottom:20px;">
+                        <li style="padding:7px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#444;">✓ Beach access</li>
+                        <li style="padding:7px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#444;">✓ Shower facilities</li>
+                        <li style="padding:7px 0;font-size:14px;color:#444;">✓ Changing rooms</li>
+                    </ul>
+                    <a href="/day-tour/book/1" style="display:block;text-align:center;padding:12px;background:#0a4a6e;color:white;border-radius:10px;text-decoration:none;font-weight:500;transition:background 0.2s;"
+                       onmouseover="this.style.background='#1a7a9e'" onmouseout="this.style.background='#0a4a6e'">
+                        Book Now
+                    </a>
+                </div>
+            </div>
+
+            <!-- BEACH + POOL -->
+            <div class="room-card-home" style="border-top:4px solid #1a6b3c;">
+                <div style="padding:28px 24px 20px;background:linear-gradient(135deg,#1a6b3c,#2ea05a);color:white;">
+                    <div style="font-size:40px;margin-bottom:10px;">🏊</div>
+                    <h3 style="font-family:'Cormorant Garamond',serif;font-size:26px;font-weight:600;margin-bottom:6px;">Beach + Pool Access</h3>
+                    <p style="font-size:32px;font-weight:700;color:#f0d49a;">₱250 <span style="font-size:14px;font-weight:400;color:rgba(255,255,255,0.7);">/ person</span></p>
+                </div>
+                <div style="padding:20px 24px;">
+                    <ul style="list-style:none;margin-bottom:20px;">
+                        <li style="padding:7px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#444;">✓ Beach access</li>
+                        <li style="padding:7px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#444;">✓ Pool access</li>
+                        <li style="padding:7px 0;border-bottom:1px solid #f0f0f0;font-size:14px;color:#444;">✓ Shower facilities</li>
+                        <li style="padding:7px 0;font-size:14px;color:#444;">✓ Changing rooms</li>
+                    </ul>
+                    <a href="/day-tour/book/2" style="display:block;text-align:center;padding:12px;background:#1a6b3c;color:white;border-radius:10px;text-decoration:none;font-weight:500;transition:background 0.2s;"
+                       onmouseover="this.style.background='#2ea05a'" onmouseout="this.style.background='#1a6b3c'">
+                        Book Now
+                    </a>
+                </div>
+            </div>
+
+        </div>
+
+        <div style="text-align:center;margin-top:30px;">
+            <a href="/day-tour" style="
+                display:inline-flex;align-items:center;gap:8px;
+                padding:12px 28px;
+                border:2px solid #0a4a6e;
+                color:#0a4a6e;
+                border-radius:10px;
+                text-decoration:none;
+                font-weight:500;
+                transition:all 0.2s;
+            "
+            onmouseover="this.style.background='#0a4a6e';this.style.color='white'"
+            onmouseout="this.style.background='transparent';this.style.color='#0a4a6e'">
+                View All Day Tour Packages →
+            </a>
+        </div>
 
     </div>
 </section>
 
 <!-- WAVE BEFORE FEATURES -->
-<div class="wave-divider" style="background: var(--sand);">
+<div class="wave-divider" style="background: white;">
     <svg viewBox="0 0 1440 60" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
         <path fill="#0d1b2a" d="M0,20 C480,80 960,0 1440,40 L1440,60 L0,60 Z"/>
     </svg>
@@ -894,7 +945,7 @@ document.addEventListener("DOMContentLoaded", function () {
 </section>
 
 <!-- FOOTER -->
-<footer class="footer">
+<footer class="footer" id="contact">
     <div class="footer-main">
 
         <!-- Brand -->
@@ -955,28 +1006,47 @@ document.addEventListener("DOMContentLoaded", function () {
         navbar.classList.toggle('scrolled', window.scrollY > 60);
     });
 
-    // Scroll-triggered card reveal using IntersectionObserver
-    const cards = document.querySelectorAll('.card');
-    const obs = new IntersectionObserver((entries) => {
+    // BUG FIX: date validation — single script, no duplicate, correct logic
+    const checkIn  = document.getElementById('check_in');
+    const checkOut = document.getElementById('check_out');
+
+    checkIn.addEventListener('change', function () {
+        checkOut.min = checkIn.value;
+        if (checkOut.value && checkOut.value <= checkIn.value) {
+            checkOut.value = '';
+        }
+    });
+
+    checkOut.addEventListener('change', function () {
+        if (checkOut.value <= checkIn.value) {
+            alert('Check-out must be after check-in date!');
+            checkOut.value = '';
+        }
+    });
+
+    // BUG FIX: target .room-card-home instead of .card for scroll reveal
+    const roomCards = document.querySelectorAll('.room-card-home');
+    const cardObs = new IntersectionObserver((entries) => {
         entries.forEach(e => {
             if (e.isIntersecting) {
                 e.target.classList.add('visible');
-                obs.unobserve(e.target);
+                cardObs.unobserve(e.target);
             }
         });
     }, { threshold: 0.15 });
 
-    cards.forEach(c => obs.observe(c));
+    roomCards.forEach(c => cardObs.observe(c));
 
     // Features stagger on scroll
     const features = document.querySelectorAll('.feature');
     const featureObs = new IntersectionObserver((entries) => {
-        entries.forEach((e, i) => {
+        entries.forEach((e) => {
             if (e.isIntersecting) {
+                const i = [...features].indexOf(e.target);
                 setTimeout(() => {
                     e.target.style.opacity = '1';
                     e.target.style.transform = 'translateY(0)';
-                }, features && [...features].indexOf(e.target) * 80);
+                }, i * 80);
                 featureObs.unobserve(e.target);
             }
         });
@@ -988,18 +1058,6 @@ document.addEventListener("DOMContentLoaded", function () {
         f.style.transition = 'opacity 0.5s, transform 0.5s';
         featureObs.observe(f);
     });
-
-    // Ripple button effect
-    function addRipple(btn, e) {
-        const rect = btn.getBoundingClientRect();
-        const x = e.clientX - rect.left - 30;
-        const y = e.clientY - rect.top - 30;
-        const r = document.createElement('span');
-        r.className = 'ripple-circle';
-        r.style.cssText = `left:${x}px;top:${y}px;`;
-        btn.appendChild(r);
-        setTimeout(() => r.remove(), 650);
-    }
 </script>
 
 </body>

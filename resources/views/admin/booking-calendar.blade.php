@@ -5,45 +5,44 @@
 <div class="card">
     <h2>📅 Booking Calendar</h2>
 
-    <div id="legend" style="margin-bottom:10px;">
-        <span style="color:orange">🟧 Pending</span> |
-        <span style="color:green">🟩 Confirmed</span> |
-        <span style="color:blue">🟦 Checked In</span> |
-        <span style="color:red">🟥 Cancelled</span>
+    <div id="legend" style="margin-bottom:12px;font-size:13px;">
+        <span style="background:orange;color:white;padding:3px 8px;border-radius:4px;margin-right:5px;">Pending</span>
+        <span style="background:green;color:white;padding:3px 8px;border-radius:4px;margin-right:5px;">Confirmed</span>
+        <span style="background:blue;color:white;padding:3px 8px;border-radius:4px;margin-right:5px;">Checked In</span>
+        <span style="background:red;color:white;padding:3px 8px;border-radius:4px;">Cancelled</span>
     </div>
 
     <div id="calendar"></div>
 </div>
 
-<link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
-
+{{-- FIX: removed duplicate FullCalendar CSS/JS — already loaded in layout.blade.php --}}
 <script>
 document.addEventListener('DOMContentLoaded', function () {
 
-    let calendarEl = document.getElementById('calendar');
-    let events = @json($events);
+    const calendarEl = document.getElementById('calendar');
+    const events     = @json($events);
 
-    let calendar = new FullCalendar.Calendar(calendarEl, {
-
+    const calendar = new FullCalendar.Calendar(calendarEl, {
         initialView: 'dayGridMonth',
         height: 700,
+        headerToolbar: {
+            left:   'prev,next today',
+            center: 'title',
+            right:  'dayGridMonth,listWeek'
+        },
         events: events,
 
-        eventClick: function(info) {
-
-            let data = info.event.extendedProps;
-
-            let message =
-                "👤 Guest: " + data.guest + "\n" +
-                "🏠 Room Number: " + data.room_number + "\n" +
-                "🏨 Room Type: " + data.room_type + "\n" +
-                "📅 Check In: " + data.check_in + "\n" +
-                "📅 Check Out: " + data.check_out;
-
-            alert(message);
+        eventClick: function (info) {
+            const d = info.event.extendedProps;
+            alert(
+                '👤 Guest: '       + (d.guest       || '-') + '\n' +
+                '🏠 Room No: '     + (d.room_number || '-') + '\n' +
+                '🏨 Room Type: '   + (d.room_type   || '-') + '\n' +
+                '📅 Check-in: '    + (d.check_in    || '-') + '\n' +
+                '📅 Check-out: '   + (d.check_out   || '-') + '\n' +
+                '📌 Status: '      + (d.status      || '-')
+            );
         }
-
     });
 
     calendar.render();

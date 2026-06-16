@@ -2,27 +2,39 @@
 
 @section('content')
 
-<h2>Edit Category</h2>
+<div style="max-width:600px;margin:auto;">
 
-<form method="POST" action="/admin/categories/update/{{ $category['id'] }}">
-    @csrf
-<label>Room Category</label>
-    <input type="text" name="name"
-           value="{{ $category['name'] }}"
-           style="width:100%;padding:10px;margin-bottom:10px;">
+    <h2>✏️ Edit Category</h2>
 
-<label>Room Description</label>
-    <textarea name="description"
-              style="width:100%;padding:10px;margin-bottom:10px;">{{ $category['description'] }}</textarea>
-<label>Room Price</label>
-    <input type="number" name="price"
-           value="{{ $category['price'] }}"
-           style="width:100%;padding:10px;margin-bottom:10px;">
+    @if(session('error'))
+        <div class="alert-error">{{ session('error') }}</div>
+    @endif
 
-    <button style="background:#0a4a6e;color:white;padding:10px 15px;border:none;border-radius:8px;">
-        Update Category
-    </button>
+    <div class="card">
+        <form method="POST" action="/admin/categories/update/{{ $category['id'] }}">
+            @csrf
 
-</form>
+            <label>Category Name</label>
+            <input type="text" name="name" value="{{ $category['name'] }}" required>
+
+            <label>Description</label>
+            <textarea name="description" rows="3">{{ $category['description'] ?? '' }}</textarea>
+
+            <label>Price per Night (₱)</label>
+            <input type="number" name="price" value="{{ $category['price'] }}" min="0" step="0.01" required>
+
+            <div style="display:flex;gap:10px;margin-top:5px;">
+                <button type="submit" class="btn btn-success" style="flex:1;padding:11px;">
+                    ✅ Update Category
+                </button>
+                <a href="/admin/categories" class="btn" style="flex:1;padding:11px;text-align:center;">
+                    Cancel
+                </a>
+            </div>
+
+        </form>
+    </div>
+
+</div>
 
 @endsection
