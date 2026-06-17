@@ -12,7 +12,7 @@
 @endif
 
 <div class="topbar">
-    <h2>🏠 Cottages/Bales Management</h2>
+    <h2>🏠 Cottages Management</h2>
 </div>
 
 @if(session('success'))

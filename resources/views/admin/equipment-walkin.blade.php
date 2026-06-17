@@ -90,37 +90,7 @@
             @endforeach
         @endif
 
-        <hr style="margin:20px 0;border:none;border-top:1px solid #ddd;">
-
-        <h3>Cottages</h3>
-
-        @if(empty($cottages))
-            <p style="color:#999;">No cottages available</p>
-        @else
-            @foreach($cottages as $cot)
-            <div style="background:#f8fafc;padding:12px;border-radius:8px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                    <div>
-                        <strong>{{ $cot['name'] ?? 'Cottage' }}</strong>
-                        <p style="font-size:12px;color:#666;margin:2px 0 0 0;">
-                            {{ $cot['size_category'] ?? 'N/A' }} • ₱{{ number_format($cot['price_per_day'] ?? 0, 2) }}/day
-                        </p>
-                    </div>
-                    <span style="background:#854d0e;color:white;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;">
-                        Available: {{ $cot['quantity_available'] ?? 0 }}
-                    </span>
-                </div>
-                <input 
-                    type="number" 
-                    name="cottages[{{ $cot['id'] }}]" 
-                    min="0" 
-                    value="0" 
-                    placeholder="Quantity"
-                    style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;"
-                >
-            </div>
-            @endforeach
-        @endif
+   
 
         <button type="submit" class="btn btn-primary" style="width:100%;padding:14px;margin-top:20px;">
             Create Rental

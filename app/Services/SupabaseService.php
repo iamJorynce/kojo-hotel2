@@ -808,20 +808,34 @@ public function createCottageBooking($data)
             'number_of_nights' => $data['number_of_nights'],
             'price_per_night'  => $data['price_per_night'],
             'total_amount'     => $data['total_amount'],
-            'paid_amount'      => 0,
-            'balance_amount'   => $data['total_amount'],
-            'payment_status'   => 'unpaid',
-            'booking_status'   => 'confirmed',
+            'paid_amount'      => $data['paid_amount'] ?? 0,
+            'balance_amount'   => $data['balance_amount'],
+            'payment_status'   => $data['payment_status'] ?? 'unpaid',
+            'booking_status'   => $data['booking_status'] ?? 'confirmed',
             'notes'            => $data['notes'] ?? null,
         ])->json();
 }
 
+// COTTAGE BOOKINGS
+
+
 public function getCottageBookings($filters = [])
 {
     $query = '/rest/v1/cottage_bookings?select=*&order=check_in.desc';
-    if (!empty($filters['cottage_id'])) $query .= '&cottage_id=eq.' . $filters['cottage_id'];
-    if (!empty($filters['status']))     $query .= '&booking_status=eq.' . $filters['status'];
-    return Http::withHeaders($this->headers())->get($this->url . $query)->json();
+
+    if (!empty($filters['cottage_id'])) {
+        $query .= '&cottage_id=eq.' . $filters['cottage_id'];
+    }
+    if (!empty($filters['status'])) {
+        $query .= '&booking_status=eq.' . $filters['status'];
+    }
+    if (!empty($filters['payment_status'])) {
+        $query .= '&payment_status=eq.' . $filters['payment_status'];
+    }
+
+    return Http::withHeaders($this->headers())
+        ->get($this->url . $query)
+        ->json();
 }
 
 public function getCottageBookingById($id)
@@ -832,13 +846,44 @@ public function getCottageBookingById($id)
     return $result[0] ?? null;
 }
 
+// ✅ COTTAGE AVAILABILITY - RENAMED to avoid conflict with equipment system
+public function isCottageAvailableForDates($cottageId, $checkIn, $checkOut, $excludeBookingId = null)
+{
+    $bookings = collect($this->getCottageBookings(['cottage_id' => $cottageId]))
+        ->filter(function ($b) use ($excludeBookingId) {
+            if ($excludeBookingId && $b['id'] == $excludeBookingId) return false;
+            return in_array($b['booking_status'] ?? '', ['confirmed', 'checked_in']);
+        });
+
+    foreach ($bookings as $b) {
+        if ($checkIn < $b['check_out'] && $checkOut > $b['check_in']) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 
 
 public function updateCottageBooking($id, $data)
 {
     return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
-        ->patch($this->url . "/rest/v1/cottage_bookings?id=eq.$id", $data)
-        ->json();
+        ->patch($this->url . "/rest/v1/cottage_bookings?id=eq.$id", [
+            'guest_name'       => $data['guest_name'] ?? null,
+            'guest_email'      => $data['guest_email'] ?? null,
+            'guest_phone'      => $data['guest_phone'] ?? null,
+            'check_in'         => $data['check_in'] ?? null,
+            'check_out'        => $data['check_out'] ?? null,
+            'number_of_nights' => $data['number_of_nights'] ?? null,
+            'price_per_night'  => $data['price_per_night'] ?? null,
+            'total_amount'     => $data['total_amount'] ?? null,
+            'paid_amount'      => $data['paid_amount'] ?? null,
+            'balance_amount'   => $data['balance_amount'] ?? null,
+            'payment_status'   => $data['payment_status'] ?? null,
+            'booking_status'   => $data['booking_status'] ?? null,
+            'notes'            => $data['notes'] ?? null,
+        ])->json();
 }
 
 // GET ALL COTTAGES WITH AVAILABILITY STATUS FOR GIVEN DATES
@@ -937,15 +982,16 @@ public function recordCottagePayment($bookingId, $data)
 {
     return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
         ->post($this->url . '/rest/v1/cottage_booking_payments', [
-            'booking_id'    => $bookingId,
-            'staff_id'      => $data['staff_id'] ?? session('admin_id'),
-            'staff_name'    => $data['staff_name'] ?? session('admin_name'),
-            'amount_received' => $data['amount_received'],
-            'payment_method' => $data['payment_method'] ?? 'cash',
-            'payment_type'  => $data['payment_type'] ?? 'full',
-            'notes'         => $data['notes'] ?? null,
+            'booking_id'       => $bookingId,
+            'staff_id'         => $data['staff_id'] ?? session('admin_id'),
+            'staff_name'       => $data['staff_name'] ?? session('admin_name'),
+            'amount_received'  => $data['amount_received'],
+            'payment_method'   => $data['payment_method'] ?? 'cash',
+            'payment_type'     => $data['payment_type'] ?? 'full',
+            'notes'            => $data['notes'] ?? null,
         ])->json();
 }
+
 
 public function getCottageBookingPayments($bookingId)
 {
@@ -957,22 +1003,17 @@ public function getCottageBookingPayments($bookingId)
 
 
 // COTTAGE IMAGES
-public function getCottageImages($cottageId)
-{
-    return Http::withHeaders($this->headers())
-        ->get($this->url . "/rest/v1/cottage_images?cottage_id=eq.$cottageId&select=*&order=is_primary.desc")
-        ->json();
-}
-
-public function addCottageImage($cottageId, $imageUrl, $isPrimary = false)
+public function addCottageImage($cottageId, $imageUrl, $description = null, $isPrimary = false)
 {
     return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
         ->post($this->url . '/rest/v1/cottage_images', [
-            'cottage_id' => $cottageId,
-            'image_url'  => $imageUrl,
-            'is_primary' => $isPrimary,
+            'cottage_id'  => $cottageId,
+            'image_url'   => $imageUrl,
+            'description' => $description,
+            'is_primary'  => $isPrimary,
         ])->json();
 }
+
 
 public function deleteCottageImage($id)
 {
@@ -997,5 +1038,223 @@ public function payCottageBooking($id, $amount, $staffName = null)
         'payment_status' => $newStatus,
     ]);
 }
+
+// GENERATE UNIQUE TRANSACTION ID
+public function generateTransactionId($prefix = 'TXN')
+{
+    return $prefix . '-' . date('YmdHis') . '-' . strtoupper(substr(md5(rand()), 0, 6));
+}
+
+// ========================================================================
+// WALK-IN DAY TOURS (MULTI-PACKAGE)
+// ========================================================================
+
+public function createWalkInDayTour($data)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->post($this->url . '/rest/v1/walk_in_day_tours', [
+            'transaction_id' => $data['transaction_id'],
+            'guest_name'     => $data['guest_name'],
+            'guest_phone'    => $data['guest_phone'],
+            'guest_email'    => $data['guest_email'] ?? null,
+            'total_guests'   => $data['total_guests'] ?? 0,
+            'total_amount'   => $data['total_amount'],
+            'paid_amount'    => $data['paid_amount'] ?? 0,
+            'balance_amount' => $data['balance_amount'],
+            'payment_status' => $data['payment_status'] ?? 'unpaid',
+            'notes'          => $data['notes'] ?? null,
+        ])->json();
+}
+
+public function addDayTourItem($tourId, $item)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->post($this->url . '/rest/v1/walk_in_day_tour_items', [
+            'tour_id'        => $tourId,
+            'item_type'      => $item['item_type'],
+            'item_id'        => $item['item_id'],
+            'item_name'      => $item['item_name'],
+            'guest_count'    => $item['guest_count'] ?? 1,
+            'price_per_unit' => $item['price_per_unit'],
+            'quantity'       => $item['quantity'] ?? 1,
+            'subtotal'       => $item['subtotal'],
+            'notes'          => $item['notes'] ?? null,
+        ])->json();
+}
+
+public function getDayTourWithItems($tourId)
+{
+    $tour = Http::withHeaders($this->headers())
+        ->get($this->url . "/rest/v1/walk_in_day_tours?id=eq.$tourId&select=*")
+        ->json();
+
+    if (empty($tour)) return null;
+
+    $tour = $tour[0];
+    $items = Http::withHeaders($this->headers())
+        ->get($this->url . "/rest/v1/walk_in_day_tour_items?tour_id=eq.$tourId&select=*")
+        ->json();
+
+    $tour['items'] = $items ?? [];
+    return $tour;
+}
+
+public function updateWalkInDayTour($tourId, $data)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->patch($this->url . "/rest/v1/walk_in_day_tours?id=eq.$tourId", [
+            'total_guests'   => $data['total_guests'] ?? null,
+            'total_amount'   => $data['total_amount'] ?? null,
+            'paid_amount'    => $data['paid_amount'] ?? null,
+            'balance_amount' => $data['balance_amount'] ?? null,
+            'payment_status' => $data['payment_status'] ?? null,
+            'notes'          => $data['notes'] ?? null,
+        ])->json();
+}
+
+// ========================================================================
+// WALK-IN BOOKINGS (MULTI-ITEM)
+// ========================================================================
+
+public function createWalkInBooking($data)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->post($this->url . '/rest/v1/walk_in_bookings', [
+            'transaction_id' => $data['transaction_id'],
+            'guest_name'     => $data['guest_name'],
+            'guest_phone'    => $data['guest_phone'],
+            'guest_email'    => $data['guest_email'] ?? null,
+            'check_in'       => $data['check_in'] ?? null,
+            'check_out'      => $data['check_out'] ?? null,
+            'number_of_nights' => $data['number_of_nights'] ?? null,
+            'total_amount'   => $data['total_amount'],
+            'paid_amount'    => $data['paid_amount'] ?? 0,
+            'balance_amount' => $data['balance_amount'],
+            'payment_status' => $data['payment_status'] ?? 'unpaid',
+            'booking_status' => $data['booking_status'] ?? 'confirmed',
+            'notes'          => $data['notes'] ?? null,
+        ])->json();
+}
+
+public function addBookingItem($bookingId, $item)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->post($this->url . '/rest/v1/walk_in_booking_items', [
+            'booking_id'      => $bookingId,
+            'item_type'       => $item['item_type'],
+            'item_id'         => $item['item_id'],
+            'item_name'       => $item['item_name'],
+            'number_of_nights'=> $item['number_of_nights'] ?? 1,
+            'price_per_night' => $item['price_per_night'] ?? null,
+            'quantity'        => $item['quantity'] ?? 1,
+            'price_per_unit'  => $item['price_per_unit'] ?? null,
+            'subtotal'        => $item['subtotal'],
+            'notes'           => $item['notes'] ?? null,
+        ])->json();
+}
+
+public function getBookingWithItems($bookingId)
+{
+    $booking = Http::withHeaders($this->headers())
+        ->get($this->url . "/rest/v1/walk_in_bookings?id=eq.$bookingId&select=*")
+        ->json();
+
+    if (empty($booking)) return null;
+
+    $booking = $booking[0];
+    $items = Http::withHeaders($this->headers())
+        ->get($this->url . "/rest/v1/walk_in_booking_items?booking_id=eq.$bookingId&select=*")
+        ->json();
+
+    $booking['items'] = $items ?? [];
+    return $booking;
+}
+
+public function updateWalkInBooking($bookingId, $data)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->patch($this->url . "/rest/v1/walk_in_bookings?id=eq.$bookingId", [
+            'number_of_nights' => $data['number_of_nights'] ?? null,
+            'total_amount'     => $data['total_amount'] ?? null,
+            'paid_amount'      => $data['paid_amount'] ?? null,
+            'balance_amount'   => $data['balance_amount'] ?? null,
+            'payment_status'   => $data['payment_status'] ?? null,
+            'booking_status'   => $data['booking_status'] ?? null,
+            'notes'            => $data['notes'] ?? null,
+        ])->json();
+}
+
+// ========================================================================
+// PAYMENT RECORDING
+// ========================================================================
+
+public function recordWalkInPayment($data)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->post($this->url . '/rest/v1/walk_in_payments', [
+            'transaction_id'   => $data['transaction_id'],
+            'transaction_type' => $data['transaction_type'],
+            'parent_id'        => $data['parent_id'],
+            'guest_name'       => $data['guest_name'],
+            'amount_received'  => $data['amount_received'],
+            'payment_method'   => $data['payment_method'] ?? 'cash',
+            'payment_type'     => $data['payment_type'] ?? 'full',
+            'staff_id'         => $data['staff_id'] ?? session('admin_id'),
+            'staff_name'       => $data['staff_name'] ?? session('admin_name'),
+            'notes'            => $data['notes'] ?? null,
+        ])->json();
+}
+
+public function getWalkInPayments($transactionId)
+{
+    return Http::withHeaders($this->headers())
+        ->get($this->url . "/rest/v1/walk_in_payments?transaction_id=eq.$transactionId&select=*&order=received_at.desc")
+        ->json();
+}
+
+// ========================================================================
+// AVAILABILITY CHECKING FOR MULTI-ITEM SYSTEM
+// ========================================================================
+
+public function getAvailableRoomsForDates($checkIn, $checkOut)
+{
+    $allRooms = collect($this->getRooms());
+    $bookings = collect($this->getBookings());
+
+    $available = [];
+    foreach ($allRooms as $room) {
+        $isBooked = $bookings->contains(function ($b) use ($room, $checkIn, $checkOut) {
+            if ($b['room_id'] != $room['id']) return false;
+            return $checkIn < $b['check_out'] && $checkOut > $b['check_in'];
+        });
+
+        if (!$isBooked) {
+            $available[] = $room;
+        }
+    }
+
+    return $available;
+}
+
+public function getAvailableCottagesForDates($checkIn, $checkOut)
+{
+    $allCottages = collect($this->getCottages());
+    $bookings = collect($this->getCottageBookings());
+
+    $available = [];
+    foreach ($allCottages as $cottage) {
+        $isBooked = $bookings->contains(function ($b) use ($cottage, $checkIn, $checkOut) {
+            if ($b['cottage_id'] != $cottage['id']) return false;
+            return $checkIn < $b['check_out'] && $checkOut > $b['check_in'];
+        });
+
+        if (!$isBooked) {
+            $available[] = $cottage;
+        }
+    }
+
+    return $available;
+}
+
 
 }

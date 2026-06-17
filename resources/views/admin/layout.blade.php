@@ -189,29 +189,34 @@ function showToast(message, type = 'success') {
     <a href="/admin/payment-submit">💳 Submit Payment</a>
 
     <div class="module-title">Room Management</div>
-    <a href="/admin/rooms">🏠 Rooms</a>
-    <a href="/admin/categories">🏨 Room Categories</a>
-    <a href="/admin/rooms/create">➕ Add Room</a>
+    <a href="/admin/rooms">🏠 Rooms List</a>
+    <a href="/admin/categories">🏨 Add / Edit Room Categories</a>
+    <a href="/admin/rooms/create">➕ Add / Edit Room</a>
 
-    <div class="module-title">Booking</div>
+    <div class="module-title">Overnight Booking</div>
     <a href="/admin/bookings/create">➕ Walk-in</a>
-    <a href="/admin/bookings">⏳ Bookings</a>
-    <a href="/admin/booking-calendar">📅 Calendar</a>
+    <a href="/admin/bookings">⏳ Online / Walk-in Bookings</a>
+    <a href="/admin/booking-calendar">📅 Booking Calendar</a>
 
     <div class="module-title">Guests</div>
     <a href="/admin/bookings/confirmed">🔵 Check-In Guest</a>
     <a href="/admin/bookings/checked-in">🔴 Check-Out Guest</a>
 
     <div class="module-title">Day Tour</div>
-    <a href="/admin/day-tours/walkin">➕ Walk-in Day Tour</a>
+    <a href="/admin/walkin/daytour">➕ Walk-in Day Tour</a>
     <a href="/admin/day-tours">🏖 Day Tour Bookings</a>
     <a href="/admin/day-tour-packages">🏷 Manage Packages</a>
 
-    <div class="module-title">Equipment</div>
-    <a href="/admin/equipment/walkin">+ New Rental</a>
-    <a href="/admin/equipment/rentals">📋 Rentals</a>
-    <a href="/admin/equipment-types">⚙️ Equipment Types</a>
-    <a href="/admin/cottages">🏠 Cottages</a>
+    
+
+    <div class="module-title">Rentals</div>
+    <a href="/admin/equipment/walkin">+ New Equipment Rental</a>
+    <a href="/admin/equipment/rentals">📋 Equipment Rentals</a>
+    <a href="/admin/equipment-types">⚙️ Equipment Manangement</a>
+
+    <a href="/admin/cottage/booking">🏠 New Cottage Rental</a>
+    <a href="/admin/cottage/bookings">📋 View Cottage Rental</a>
+    <a href="/admin/cottages">🏠 Cottage Management</a>
 
     <div class="module-title">Account</div>
     <form method="GET" action="/admin/logout">

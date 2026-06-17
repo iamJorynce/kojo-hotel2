@@ -1917,3 +1917,470 @@ Route::get('/admin/remittance-report', function (Request $request, SupabaseServi
         'totalSubmitted', 'totalApproved', 'totalPending', 'approvedCount'
     ));
 });
+
+/*
+|==========================================================================
+| COTTAGE BOOKING - COMPLETE ROUTES
+| Add these to routes/web.php INSTEAD of the previous routes
+|==========================================================================
+*/
+
+// API - GET AVAILABLE COTTAGES FOR DATES
+Route::get('/api/available-cottages', function (Request $request, SupabaseService $supabase) {
+    $checkIn = $request->get('check_in');
+    $checkOut = $request->get('check_out');
+
+    if (!$checkIn || !$checkOut) {
+        return response()->json(['available' => []]);
+    }
+
+    $allCottages = collect($supabase->getCottages())->where('is_active', true);
+    $bookings = collect($supabase->getCottageBookings())
+        ->filter(fn($b) => in_array($b['booking_status'], ['confirmed', 'checked_in']));
+
+    $available = [];
+    foreach ($allCottages as $cottage) {
+        $isBooked = $bookings->contains(function ($b) use ($cottage, $checkIn, $checkOut) {
+            if ($b['cottage_id'] != $cottage['id']) return false;
+            return $checkIn < $b['check_out'] && $checkOut > $b['check_in'];
+        });
+
+        if (!$isBooked) {
+            $available[] = $cottage;
+        }
+    }
+
+    return response()->json(['available' => $available]);
+});
+
+// ADMIN - NEW COTTAGE BOOKING
+Route::get('/admin/cottage/booking', function (SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    return view('admin.cottage-booking', compact('supabase'));
+});
+
+Route::post('/admin/cottage/booking', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $request->validate([
+        'guest_name'  => 'required|string|max:255',
+        'guest_phone' => 'required|string|max:20',
+        'check_in'    => 'required|date|after_or_equal:today',
+        'check_out'   => 'required|date|after:check_in',
+        'cottage_id'  => 'required|integer',
+    ]);
+
+    $cottageId = (int)$request->cottage_id;
+    $checkIn = $request->check_in;
+    $checkOut = $request->check_out;
+
+    // CHECK AVAILABILITY
+    $allBookings = collect($supabase->getCottageBookings())
+        ->filter(fn($b) => in_array($b['booking_status'], ['confirmed', 'checked_in']));
+
+    $isBooked = $allBookings->contains(function ($b) use ($cottageId, $checkIn, $checkOut) {
+        if ($b['cottage_id'] != $cottageId) return false;
+        return $checkIn < $b['check_out'] && $checkOut > $b['check_in'];
+    });
+
+    if ($isBooked) {
+        return back()->withErrors(['cottage' => 'Cottage is booked for those dates']);
+    }
+
+    // CALCULATE
+    $startDate = new DateTime($checkIn);
+    $endDate = new DateTime($checkOut);
+    $nights = $endDate->diff($startDate)->days;
+    if ($nights == 0) $nights = 1;
+
+    $cottage = $supabase->getCottageById($cottageId);
+    $pricePerNight = (float)($cottage['price_per_day'] ?? 0);
+    $totalAmount = $pricePerNight * $nights;
+
+    // CREATE BOOKING
+    $response = $supabase->createCottageBooking([
+        'cottage_id'       => $cottageId,
+        'guest_name'       => $request->guest_name,
+        'guest_email'      => $request->guest_email ?? null,
+        'guest_phone'      => $request->guest_phone,
+        'check_in'         => $checkIn,
+        'check_out'        => $checkOut,
+        'number_of_nights' => $nights,
+        'price_per_night'  => $pricePerNight,
+        'total_amount'     => $totalAmount,
+        'paid_amount'      => 0,
+        'balance_amount'   => $totalAmount,
+        'payment_status'   => 'unpaid',
+        'booking_status'   => 'confirmed',
+        'notes'            => $request->notes ?? null,
+    ]);
+
+    if (!$response || empty($response)) {
+        return back()->with('error', 'Failed to create booking');
+    }
+
+    $bookingId = $response[0]['id'];
+
+    $supabase->log('cottage_booking_created', [
+        'target_type'  => 'cottage_booking',
+        'target_id'    => $bookingId,
+        'target_label' => $request->guest_name . ' — ' . $cottage['name'] . ' (' . $nights . ' night' . ($nights > 1 ? 's' : '') . ')',
+        'amount'       => $totalAmount,
+    ]);
+
+    return redirect('/admin/cottage/bookings')
+        ->with('success', '✅ Booking created! ₱' . number_format($totalAmount, 2) . ' for ' . $nights . ' night(s)');
+});
+
+// ADMIN - VIEW ALL BOOKINGS
+Route::get('/admin/cottage/bookings', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $allBookings = collect($supabase->getCottageBookings());
+    $cottages = collect($supabase->getCottages());
+    $today = date('Y-m-d');
+
+    $filter = $request->get('filter', 'upcoming');
+
+    if ($filter === 'upcoming') {
+        $bookings = $allBookings->where('booking_status', 'confirmed')
+                                 ->where('check_in', '>=', $today)
+                                 ->sortBy('check_in')
+                                 ->values();
+    } elseif ($filter === 'checked_in') {
+        $bookings = $allBookings->where('booking_status', 'checked_in')->values();
+    } elseif ($filter === 'unpaid') {
+        $bookings = $allBookings->where('payment_status', 'unpaid')->values();
+    } else {
+        $bookings = $allBookings->sortByDesc('created_at')->values();
+    }
+
+    return view('admin.cottage-bookings', compact('bookings', 'cottages', 'filter', 'supabase'));
+});
+
+// ADMIN - BOOKING DETAIL
+Route::get('/admin/cottage/booking/{id}', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $booking = $supabase->getCottageBookingById($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+
+    $cottage = $supabase->getCottageById($booking['cottage_id']);
+    $payments = $supabase->getCottageBookingPayments($id);
+
+    return view('admin.cottage-booking-detail', compact('booking', 'cottage', 'payments', 'supabase'));
+});
+
+// ADMIN - RECORD PAYMENT
+Route::post('/admin/cottage/booking/{id}/payment', function ($id, Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $request->validate(['cash_received' => 'required|numeric|min:0.01']);
+
+    $booking = $supabase->getCottageBookingById($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+
+    $cash = (float)$request->cash_received;
+    $total = (float)$booking['total_amount'];
+    $alreadyPaid = (float)($booking['paid_amount'] ?? 0);
+    $balance = $total - $alreadyPaid;
+
+    if ($cash <= 0) return back()->with('error', 'Invalid amount');
+    if ($cash < $balance) return back()->with('error', 'Need ₱' . number_format($balance, 2));
+
+    $supabase->updateCottageBooking($id, [
+        'guest_name'       => $booking['guest_name'],
+        'guest_email'      => $booking['guest_email'],
+        'guest_phone'      => $booking['guest_phone'],
+        'check_in'         => $booking['check_in'],
+        'check_out'        => $booking['check_out'],
+        'number_of_nights' => $booking['number_of_nights'],
+        'price_per_night'  => $booking['price_per_night'],
+        'total_amount'     => $booking['total_amount'],
+        'paid_amount'      => $total,
+        'balance_amount'   => 0,
+        'payment_status'   => 'paid',
+        'booking_status'   => $booking['booking_status'],
+        'notes'            => $booking['notes'],
+    ]);
+
+    $supabase->recordCottagePayment($id, ['amount_received' => $cash]);
+
+    $supabase->log('cottage_payment', [
+        'target_type'  => 'cottage_booking',
+        'target_id'    => $id,
+        'target_label' => $booking['guest_name'] . ' — ₱' . number_format($cash, 2),
+        'amount'       => $cash,
+    ]);
+
+    return back()->with('success', '✅ Payment recorded! ₱' . number_format($cash, 2));
+});
+
+// ADMIN - CHECK-IN
+Route::post('/admin/cottage/booking/{id}/checkin', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $booking = $supabase->getCottageBookingById($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+
+    $supabase->updateCottageBooking($id, [
+        'guest_name'       => $booking['guest_name'],
+        'guest_email'      => $booking['guest_email'],
+        'guest_phone'      => $booking['guest_phone'],
+        'check_in'         => $booking['check_in'],
+        'check_out'        => $booking['check_out'],
+        'number_of_nights' => $booking['number_of_nights'],
+        'price_per_night'  => $booking['price_per_night'],
+        'total_amount'     => $booking['total_amount'],
+        'paid_amount'      => $booking['paid_amount'],
+        'balance_amount'   => $booking['balance_amount'],
+        'payment_status'   => $booking['payment_status'],
+        'booking_status'   => 'checked_in',
+        'notes'            => $booking['notes'],
+    ]);
+
+    $supabase->log('cottage_checkin', [
+        'target_type'  => 'cottage_booking',
+        'target_id'    => $id,
+        'target_label' => $booking['guest_name'],
+    ]);
+
+    return back()->with('success', '✅ Checked in');
+});
+
+// ADMIN - CHECK-OUT
+Route::post('/admin/cottage/booking/{id}/checkout', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+
+    $booking = $supabase->getCottageBookingById($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+
+    $supabase->updateCottageBooking($id, [
+        'guest_name'       => $booking['guest_name'],
+        'guest_email'      => $booking['guest_email'],
+        'guest_phone'      => $booking['guest_phone'],
+        'check_in'         => $booking['check_in'],
+        'check_out'        => $booking['check_out'],
+        'number_of_nights' => $booking['number_of_nights'],
+        'price_per_night'  => $booking['price_per_night'],
+        'total_amount'     => $booking['total_amount'],
+        'paid_amount'      => $booking['paid_amount'],
+        'balance_amount'   => $booking['balance_amount'],
+        'payment_status'   => $booking['payment_status'],
+        'booking_status'   => 'checked_out',
+        'notes'            => $booking['notes'],
+    ]);
+
+    $supabase->log('cottage_checkout', [
+        'target_type'  => 'cottage_booking',
+        'target_id'    => $id,
+        'target_label' => $booking['guest_name'],
+    ]);
+
+    return back()->with('success', '✅ Checked out');
+});
+
+// SHOW POS FORM
+Route::get('/admin/walkin/daytour', function (SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $dayTourPackages = $supabase->getDayTourPackages();
+    $cottages = $supabase->getCottages();
+    $equipmentTypes = $supabase->getEquipmentTypes();
+    
+    return view('admin.walkin-daytour-pos', compact('dayTourPackages', 'cottages', 'equipmentTypes'));
+});
+
+// CREATE TRANSACTION (Multi-Package)
+Route::post('/admin/walkin/daytour/store', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $request->validate([
+        'guest_name'  => 'required|string|max:255',
+        'guest_phone' => 'required|string|max:20',
+        'items_json'  => 'required|json',
+    ]);
+    
+    $itemsData = json_decode($request->items_json, true);
+    
+    if (empty($itemsData['packages']) && empty($itemsData['cottages']) && empty($itemsData['equipment'])) {
+        return back()->withErrors(['items' => 'Please add at least one item']);
+    }
+    
+    // CALCULATE TOTAL
+    $total = 0;
+    foreach ($itemsData['packages'] as $pkg) {
+        $total += (float)($pkg['subtotal'] ?? 0);
+    }
+    foreach ($itemsData['cottages'] as $cottage) {
+        $total += (float)($cottage['subtotal'] ?? 0);
+    }
+    foreach ($itemsData['equipment'] as $eq) {
+        $total += (float)($eq['subtotal'] ?? 0);
+    }
+    
+    // CREATE TRANSACTION ID
+    $transactionId = $supabase->generateTransactionId('TOUR');
+    
+    // CREATE WALK-IN DAY TOUR HEADER
+    $tourResponse = $supabase->createWalkInDayTour([
+        'transaction_id' => $transactionId,
+        'guest_name'     => $request->guest_name,
+        'guest_phone'    => $request->guest_phone,
+        'guest_email'    => $request->guest_email ?? null,
+        'total_guests'   => 0,
+        'total_amount'   => $total,
+        'paid_amount'    => 0,
+        'balance_amount' => $total,
+        'payment_status' => 'unpaid',
+        'notes'          => $request->notes ?? null,
+    ]);
+    
+    if (!$tourResponse || empty($tourResponse)) {
+        return back()->withErrors(['error' => 'Failed to create transaction']);
+    }
+    
+    $tourId = $tourResponse[0]['id'];
+    
+    // ADD PACKAGE ITEMS
+    foreach ($itemsData['packages'] as $pkg) {
+        $supabase->addDayTourItem($tourId, [
+            'item_type'      => 'package',
+            'item_id'        => $pkg['pkgId'],
+            'item_name'      => $pkg['name'],
+            'guest_count'    => $pkg['guestCount'],
+            'price_per_unit' => $pkg['pricePerUnit'],
+            'quantity'       => 1,
+            'subtotal'       => $pkg['subtotal'],
+        ]);
+    }
+    
+    // ADD COTTAGE ITEMS
+    foreach ($itemsData['cottages'] as $cottage) {
+        if (!empty($cottage['cottageId'])) {
+            $supabase->addDayTourItem($tourId, [
+                'item_type'      => 'cottage',
+                'item_id'        => $cottage['cottageId'],
+                'item_name'      => $cottage['name'],
+                'guest_count'    => 1,
+                'price_per_unit' => $cottage['pricePerNight'],
+                'quantity'       => $cottage['nights'],
+                'subtotal'       => $cottage['subtotal'],
+            ]);
+        }
+    }
+    
+    // ADD EQUIPMENT ITEMS
+    foreach ($itemsData['equipment'] as $eq) {
+        if (!empty($eq['equipmentId'])) {
+            $supabase->addDayTourItem($tourId, [
+                'item_type'      => 'equipment',
+                'item_id'        => $eq['equipmentId'],
+                'item_name'      => $eq['name'],
+                'guest_count'    => 1,
+                'price_per_unit' => $eq['pricePerUnit'],
+                'quantity'       => $eq['quantity'],
+                'subtotal'       => $eq['subtotal'],
+            ]);
+        }
+    }
+    
+    // LOG ACTION
+    $supabase->log('walkin_daytour_created', [
+        'target_type'  => 'walk_in_day_tour',
+        'target_id'    => $tourId,
+        'target_label' => $request->guest_name . ' — ' . $transactionId . ' (₱' . number_format($total, 2) . ')',
+        'amount'       => $total,
+    ]);
+    
+    return redirect("/admin/walkin/daytour/$tourId/payment")
+        ->with('success', '✅ Transaction created! ₱' . number_format($total, 2));
+});
+
+// PAYMENT PAGE
+Route::get('/admin/walkin/daytour/{id}/payment', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $tour = $supabase->getDayTourWithItems($id);
+    if (!$tour) return back()->with('error', 'Tour not found');
+    
+    $payments = $supabase->getWalkInPayments($tour['transaction_id']);
+    
+    return view('admin.walkin-daytour-payment', compact('tour', 'payments', 'supabase'));
+});
+
+// RECORD PAYMENT
+Route::post('/admin/walkin/daytour/{id}/payment', function ($id, Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $request->validate(['cash_received' => 'required|numeric|min:0.01']);
+    
+    $tour = $supabase->getDayTourWithItems($id);
+    if (!$tour) return back()->with('error', 'Tour not found');
+    
+    $cash = (float)$request->cash_received;
+    $total = (float)$tour['total_amount'];
+    $alreadyPaid = (float)($tour['paid_amount'] ?? 0);
+    $balance = $total - $alreadyPaid;
+    
+    if ($cash <= 0) return back()->with('error', 'Invalid amount');
+    if ($cash > $balance) $cash = $balance;
+    
+    $newPaid = $alreadyPaid + $cash;
+    $newBalance = $total - $newPaid;
+    $newStatus = ($newBalance <= 0) ? 'paid' : 'partial';
+    
+    // UPDATE TOUR
+    $supabase->updateWalkInDayTour($id, [
+        'paid_amount'    => $newPaid,
+        'balance_amount' => $newBalance,
+        'payment_status' => $newStatus,
+    ]);
+    
+    // RECORD PAYMENT
+    $supabase->recordWalkInPayment([
+        'transaction_id'   => $tour['transaction_id'],
+        'transaction_type' => 'day_tour',
+        'parent_id'        => $id,
+        'guest_name'       => $tour['guest_name'],
+        'amount_received'  => $cash,
+        'payment_method'   => 'cash',
+        'payment_type'     => $newStatus === 'paid' ? 'full' : 'partial',
+    ]);
+    
+    $supabase->log('walkin_daytour_payment', [
+        'target_type'  => 'walk_in_day_tour',
+        'target_id'    => $id,
+        'target_label' => $tour['guest_name'] . ' — ₱' . number_format($cash, 2),
+        'amount'       => $cash,
+    ]);
+    
+    return back()->with('success', '✅ Payment recorded! ₱' . number_format($cash, 2));
+});
+
+// VIEW ALL DAY TOURS
+Route::get('/admin/walkin/daytours', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $allTours = collect($supabase->getCottageBookings());
+    $filter = $request->get('filter', 'recent');
+    
+    if ($filter === 'unpaid') {
+        $tours = $allTours->where('payment_status', 'unpaid')->sortByDesc('created_at')->values();
+    } else {
+        $tours = $allTours->sortByDesc('created_at')->values();
+    }
+    
+    return view('admin.walkin-daytours-list', compact('tours', 'filter'));
+});
+
+// RECEIPT/RECEIPT VIEW
+Route::get('/admin/walkin/daytour/{id}/receipt', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $tour = $supabase->getDayTourWithItems($id);
+    if (!$tour) return back()->with('error', 'Tour not found');
+    
+    return view('admin.walkin-daytour-receipt', compact('tour'));
+});
+

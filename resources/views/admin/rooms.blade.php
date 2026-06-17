@@ -4,7 +4,7 @@
 
 <div class="topbar">
     <h2>🏠 Rooms Management</h2>
-    <a class="btn" href="/admin/rooms/create">+ Add Room</a>
+   
 </div>
 
 @if(session('success'))
