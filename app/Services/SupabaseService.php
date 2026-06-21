@@ -26,13 +26,7 @@ class SupabaseService
     }
 
     // ROOMS
-    public function getRooms()
-    {
-        return Http::withHeaders($this->headers())
-            ->get($this->url . '/rest/v1/rooms?select=*')
-            ->json();
-    }
-
+  
     public function createRoom($data)
     {
         return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
@@ -239,12 +233,7 @@ class SupabaseService
     }
 
     // DAY TOUR PACKAGES
-    public function getDayTourPackages()
-    {
-        return Http::withHeaders($this->headers())
-            ->get($this->url . '/rest/v1/day_tour_packages?select=*&order=price_per_person.asc')
-            ->json();
-    }
+   
 
     public function createDayTourPackage($data)
     {
@@ -426,12 +415,7 @@ class SupabaseService
     }
 
     // EQUIPMENT TYPES
-    public function getEquipmentTypes()
-    {
-        return Http::withHeaders($this->headers())
-            ->get($this->url . '/rest/v1/equipment_types?select=*&is_active=eq.true&order=name.asc')
-            ->json();
-    }
+
 
     public function getEquipmentTypeById($id)
     {
@@ -471,12 +455,7 @@ class SupabaseService
     }
 
     // COTTAGES
-    public function getCottages()
-    {
-        return Http::withHeaders($this->headers())
-            ->get($this->url . '/rest/v1/cottages?select=*&is_active=eq.true&order=name.asc')
-            ->json();
-    }
+  
 
     public function getCottageById($id)
     {
@@ -1039,11 +1018,7 @@ public function payCottageBooking($id, $amount, $staffName = null)
     ]);
 }
 
-// GENERATE UNIQUE TRANSACTION ID
-public function generateTransactionId($prefix = 'TXN')
-{
-    return $prefix . '-' . date('YmdHis') . '-' . strtoupper(substr(md5(rand()), 0, 6));
-}
+
 
 // ========================================================================
 // WALK-IN DAY TOURS (MULTI-PACKAGE)
@@ -1188,22 +1163,6 @@ public function updateWalkInBooking($bookingId, $data)
 // PAYMENT RECORDING
 // ========================================================================
 
-public function recordWalkInPayment($data)
-{
-    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
-        ->post($this->url . '/rest/v1/walk_in_payments', [
-            'transaction_id'   => $data['transaction_id'],
-            'transaction_type' => $data['transaction_type'],
-            'parent_id'        => $data['parent_id'],
-            'guest_name'       => $data['guest_name'],
-            'amount_received'  => $data['amount_received'],
-            'payment_method'   => $data['payment_method'] ?? 'cash',
-            'payment_type'     => $data['payment_type'] ?? 'full',
-            'staff_id'         => $data['staff_id'] ?? session('admin_id'),
-            'staff_name'       => $data['staff_name'] ?? session('admin_name'),
-            'notes'            => $data['notes'] ?? null,
-        ])->json();
-}
 
 public function getWalkInPayments($transactionId)
 {
@@ -1255,6 +1214,281 @@ public function getAvailableCottagesForDates($checkIn, $checkOut)
 
     return $available;
 }
+
+/**
+ * Generate unique transaction ID
+ */
+public function generateTransactionId($prefix = 'TRANS')
+{
+    $date = date('Ymd');
+    $random = strtoupper(substr(md5(time() . rand()), 0, 6));
+    return "$prefix-$date-$random";
+}
+
+/**
+ * Create a new walk-in transaction (day tour, booking, or equipment)
+ */
+public function createWalkInTransaction($data)
+{
+    return Http::withHeaders($this->headers())
+        ->post($this->url . '/rest/v1/walk_in_transactions', $data)
+        ->json();
+}
+
+/**
+ * Update walk-in transaction
+ */
+public function updateWalkInTransaction($transactionId, $data)
+{
+    return Http::withHeaders(array_merge($this->headers(), ['Prefer' => 'return=representation']))
+        ->patch($this->url . '/rest/v1/walk_in_transactions?transaction_id=eq.' . $transactionId, $data)
+        ->json();
+}
+
+/**
+ * Get transaction with all items
+ */
+public function getTransactionWithItems($transactionId)
+{
+    $transaction = Http::withHeaders($this->headers())
+        ->get($this->url . '/rest/v1/walk_in_transactions?transaction_id=eq.' . $transactionId)
+        ->json();
+    
+    if (empty($transaction)) return null;
+    
+    $tx = $transaction[0];
+    $items = Http::withHeaders($this->headers())
+        ->get($this->url . '/rest/v1/walk_in_transaction_items?transaction_id=eq.' . $transactionId)
+        ->json();
+    
+    $tx['items'] = $items ?? [];
+    return $tx;
+}
+
+/**
+ * Add item to transaction
+ */
+public function addTransactionItem($transactionId, $item)
+{
+    return Http::withHeaders($this->headers())
+        ->post($this->url . '/rest/v1/walk_in_transaction_items', array_merge(['transaction_id' => $transactionId], $item))
+        ->json();
+}
+
+/**
+ * Record payment for transaction
+ */
+public function recordWalkInPayment($data)
+{
+    return Http::withHeaders($this->headers())
+        ->post($this->url . '/rest/v1/walk_in_payments', $data)
+        ->json();
+}
+
+/**
+ * Get all payments for transaction
+ */
+public function getTransactionPayments($transactionId)
+{
+    return Http::withHeaders($this->headers())
+        ->get($this->url . '/rest/v1/walk_in_payments?transaction_id=eq.' . $transactionId . '&order=received_at.desc')
+        ->json();
+}
+
+/**
+ * Get all transactions (with filters)
+ */
+public function getAllTransactions($type = null, $paymentStatus = null, $limit = 100)
+{
+    $query = '/rest/v1/walk_in_transactions?order=created_at.desc&limit=' . $limit;
+    
+    if ($type) {
+        $query .= '&transaction_type=eq.' . $type;
+    }
+    
+    if ($paymentStatus) {
+        $query .= '&payment_status=eq.' . $paymentStatus;
+    }
+    
+    return Http::withHeaders($this->headers())
+        ->get($this->url . $query)
+        ->json();
+}
+
+/**
+ * Get transactions by date range
+ */
+public function getTransactionsByDateRange($startDate, $endDate, $type = null)
+{
+    $query = '/rest/v1/walk_in_transactions?created_at=gte.' . $startDate . '&created_at=lte.' . $endDate . '&order=created_at.desc';
+    
+    if ($type) {
+        $query .= '&transaction_type=eq.' . $type;
+    }
+    
+    return Http::withHeaders($this->headers())
+        ->get($this->url . $query)
+        ->json();
+}
+
+/**
+ * Check room/cottage availability for dates
+ */
+public function checkAvailabilityForDates($itemId, $itemType, $checkIn, $checkOut)
+{
+    // Get all bookings that overlap with these dates
+    $transactions = Http::withHeaders($this->headers())
+        ->get($this->url . '/rest/v1/walk_in_transactions?transaction_type=eq.booking&transaction_status=neq.cancelled')
+        ->json();
+    
+    if (empty($transactions)) return true;
+    
+    $checkInDate = new DateTime($checkIn);
+    $checkOutDate = new DateTime($checkOut);
+    
+    foreach ($transactions as $tx) {
+        if (empty($tx['check_in']) || empty($tx['check_out'])) continue;
+        
+        $txCheckIn = new DateTime($tx['check_in']);
+        $txCheckOut = new DateTime($tx['check_out']);
+        
+        // Check for overlap
+        if ($checkInDate < $txCheckOut && $checkOutDate > $txCheckIn) {
+            // Get items to see if this item_id is booked
+            $items = Http::withHeaders($this->headers())
+                ->get($this->url . '/rest/v1/walk_in_transaction_items?transaction_id=eq.' . $tx['transaction_id'] . '&item_id=eq.' . $itemId)
+                ->json();
+            
+            if (!empty($items)) {
+                return false; // Not available
+            }
+        }
+    }
+    
+    return true; // Available
+}
+
+/**
+ * Get available rooms/cottages for date range
+ */
+public function getAvailableItemsForDates($itemType, $checkIn, $checkOut)
+{
+    // Get all items of this type
+    $allItems = ($itemType === 'room') ? $this->getRooms() : $this->getCottages();
+    
+    if (empty($allItems)) return [];
+    
+    $available = [];
+    
+    foreach ($allItems as $item) {
+        if ($this->checkAvailabilityForDates($item['id'], $itemType, $checkIn, $checkOut)) {
+            $available[] = $item;
+        }
+    }
+    
+    return $available;
+}
+
+/**
+ * Get daily transaction summary
+ */
+public function getDailyTransactionSummary($date)
+{
+    $transactions = Http::withHeaders($this->headers())
+        ->get($this->url . '/rest/v1/walk_in_transactions?created_at=gte.' . $date . ' 00:00:00&created_at=lt.' . $date . ' 23:59:59')
+        ->json();
+    
+    if (empty($transactions)) {
+        return [
+            'total_transactions' => 0,
+            'total_revenue' => 0,
+            'paid' => 0,
+            'unpaid' => 0,
+            'by_type' => []
+        ];
+    }
+    
+    $summary = [
+        'total_transactions' => count($transactions),
+        'total_revenue' => array_sum(array_column($transactions, 'total_amount')),
+        'paid' => 0,
+        'unpaid' => 0,
+        'partial' => 0,
+        'by_type' => []
+    ];
+    
+    foreach ($transactions as $tx) {
+        // Count by payment status
+        $status = $tx['payment_status'];
+        if ($status === 'paid') $summary['paid']++;
+        elseif ($status === 'unpaid') $summary['unpaid']++;
+        else $summary['partial']++;
+        
+        // Count by type
+        $type = $tx['transaction_type'];
+        if (!isset($summary['by_type'][$type])) {
+            $summary['by_type'][$type] = ['count' => 0, 'revenue' => 0];
+        }
+        $summary['by_type'][$type]['count']++;
+        $summary['by_type'][$type]['revenue'] += $tx['total_amount'];
+    }
+    
+    return $summary;
+}
+
+/**
+ * Get payment history for transaction
+ */
+public function getPaymentHistory($transactionId)
+{
+    return Http::withHeaders($this->headers())
+        ->get($this->url . '/rest/v1/walk_in_payments?transaction_id=eq.' . $transactionId . '&order=received_at.desc')
+        ->json();
+}
+
+/**
+ * Get available day tour packages
+ */
+public function getDayTourPackages()
+{
+    return Http::withHeaders($this->headers())
+        ->get($this->url . '/rest/v1/day_tour_packages')
+        ->json();
+}
+
+/**
+ * Get rooms
+ */
+public function getRooms()
+{
+    return Http::withHeaders($this->headers())
+        ->get($this->url . '/rest/v1/rooms')
+        ->json();
+}
+
+/**
+ * Get cottages
+ */
+public function getCottages()
+{
+    return Http::withHeaders($this->headers())
+        ->get($this->url . '/rest/v1/cottages')
+        ->json();
+}
+
+/**
+ * Get equipment types
+ */
+public function getEquipmentTypes()
+{
+    return Http::withHeaders($this->headers())
+        ->get($this->url . '/rest/v1/equipment_types')
+        ->json();
+}
+
+
+
+
 
 
 }

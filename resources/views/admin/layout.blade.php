@@ -175,54 +175,250 @@ function showToast(message, type = 'success') {
 <script>document.addEventListener('DOMContentLoaded', () => showToast("{{ session('error') }}", 'error'));</script>
 @endif
 
-<!-- SIDEBAR -->
+<!-- CLEANED SIDEBAR - OLD EQUIPMENT SYSTEM REMOVED -->
+
 <div class="sidebar">
-    <h2>🏨 Admin Panel</h2>
+    <h2>🏨 Sea Eagle Resort Admin</h2>
 
-    <div class="module-title">Admin</div>
+    <!-- MAIN -->
+    <div class="module-title">📊 Main</div>
     <a href="/admin/dashboard">📊 Dashboard</a>
-
-    <div class="module-title">Staff & Reports</div>
-    <a href="/admin/staff">👥 Staff Management</a>
     <a href="/admin/audit-log">📋 Audit Log</a>
+
+    <!-- STAFF & SETTINGS -->
+    <div class="module-title">👥 Staff & Settings</div>
+    <a href="/admin/staff">👥 Staff Management</a>
     <a href="/admin/payments">💰 Payment Records</a>
     <a href="/admin/payment-submit">💳 Submit Payment</a>
 
-    <div class="module-title">Room Management</div>
+    <!-- ROOM MANAGEMENT -->
+    <div class="module-title">🏠 Room Management</div>
     <a href="/admin/rooms">🏠 Rooms List</a>
-    <a href="/admin/categories">🏨 Add / Edit Room Categories</a>
+    <a href="/admin/categories">🏨 Room Categories</a>
     <a href="/admin/rooms/create">➕ Add / Edit Room</a>
 
-    <div class="module-title">Overnight Booking</div>
-    <a href="/admin/bookings/create">➕ Walk-in</a>
-    <a href="/admin/bookings">⏳ Online / Walk-in Bookings</a>
+    <!-- STANDARD BOOKINGS -->
+    <div class="module-title">🛏️ Standard Bookings</div>
+    <a href="/admin/bookings/create">➕ New Booking (Walk-in)</a>
+    <a href="/admin/bookings">📅 All Bookings</a>
     <a href="/admin/booking-calendar">📅 Booking Calendar</a>
 
-    <div class="module-title">Guests</div>
+    <!-- GUEST OPERATIONS -->
+    <div class="module-title">🚪 Guest Operations</div>
     <a href="/admin/bookings/confirmed">🔵 Check-In Guest</a>
     <a href="/admin/bookings/checked-in">🔴 Check-Out Guest</a>
 
-    <div class="module-title">Day Tour</div>
-    <a href="/admin/walkin/daytour">➕ Walk-in Day Tour</a>
-    <a href="/admin/day-tours">🏖 Day Tour Bookings</a>
+    <!-- ========== UNIFIED WALK-IN POS (NEW) ========== -->
+    <div class="module-title" style="background:#38bdf8;color:white;padding:8px 14px;border-radius:6px;margin:16px 0;">
+        🧾 WALK-IN POS SYSTEM (UNIFIED)
+    </div>
+    <a href="/admin/walkin/pos" style="color:#38bdf8;font-weight:600;font-size:14px;">➕ New Transaction</a>
+    <a href="/admin/walkin/transactions" style="color:#38bdf8;">📋 Transaction History</a>
+
+    <!-- DAY TOUR PACKAGES MANAGEMENT -->
+    <div class="module-title">🌴 Day Tour Packages</div>
     <a href="/admin/day-tour-packages">🏷 Manage Packages</a>
 
-    
+    <!-- COTTAGE MANAGEMENT -->
+    <div class="module-title">🏡 Cottage Management</div>
+    <a href="/admin/cottages">🏠 Cottages</a>
 
-    <div class="module-title">Rentals</div>
-    <a href="/admin/equipment/walkin">+ New Equipment Rental</a>
-    <a href="/admin/equipment/rentals">📋 Equipment Rentals</a>
-    <a href="/admin/equipment-types">⚙️ Equipment Manangement</a>
+    <!-- EQUIPMENT TYPES MANAGEMENT -->
+    <div class="module-title">🧰 Equipment Types</div>
+    <a href="/admin/equipment-types">⚙️ Manage Equipment</a>
 
-    <a href="/admin/cottage/booking">🏠 New Cottage Rental</a>
-    <a href="/admin/cottage/bookings">📋 View Cottage Rental</a>
-    <a href="/admin/cottages">🏠 Cottage Management</a>
+    <!-- REPORTS -->
+    <div class="module-title">📊 Reports</div>
+    <a href="/admin/daily-summary">📈 Daily Summary</a>
+    <a href="/admin/revenue-report">💰 Revenue Report</a>
 
-    <div class="module-title">Account</div>
-    <form method="GET" action="/admin/logout">
+    <!-- ACCOUNT -->
+    <div class="module-title">⚙️ Account</div>
+    <form method="GET" action="/admin/logout" style="margin:0;">
         <button class="logout-btn" onclick="return confirm('Logout now?')">🚪 Logout</button>
     </form>
 </div>
+
+<style>
+.sidebar {
+    padding: 20px 0;
+}
+
+.module-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #666;
+    padding: 12px 14px;
+    margin: 20px 0 8px 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.sidebar a {
+    display: block;
+    padding: 10px 14px;
+    color: #333;
+    text-decoration: none;
+    font-size: 13px;
+    border-left: 3px solid transparent;
+    transition: all 0.2s;
+}
+
+.sidebar a:hover {
+    background: #f5f5f5;
+    border-left-color: #0a4a6e;
+    color: #0a4a6e;
+}
+
+.sidebar a[href*="walkin"] {
+    color: #38bdf8;
+    font-weight: 500;
+}
+
+.sidebar a[href*="walkin"]:hover {
+    background: #e0f7ff;
+}
+
+.logout-btn {
+    width: 100%;
+    padding: 10px 14px;
+    background: #c0392b;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    text-align: left;
+    font-weight: 600;
+    transition: 0.2s;
+}
+
+.logout-btn:hover {
+    background: #a93226;
+}
+</style>
+
+<style>
+.sidebar {
+    padding: 20px 0;
+}
+
+.module-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #666;
+    padding: 12px 14px;
+    margin: 20px 0 8px 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.sidebar a {
+    display: block;
+    padding: 10px 14px;
+    color: #333;
+    text-decoration: none;
+    font-size: 13px;
+    border-left: 3px solid transparent;
+    transition: all 0.2s;
+}
+
+.sidebar a:hover {
+    background: #f5f5f5;
+    border-left-color: #0a4a6e;
+    color: #0a4a6e;
+}
+
+.sidebar a[href*="walkin"] {
+    color: #38bdf8;
+    font-weight: 500;
+}
+
+.sidebar a[href*="walkin"]:hover {
+    background: #e0f7ff;
+}
+
+.logout-btn {
+    width: 100%;
+    padding: 10px 14px;
+    background: #c0392b;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    text-align: left;
+    font-weight: 600;
+    transition: 0.2s;
+}
+
+.logout-btn:hover {
+    background: #a93226;
+}
+</style>
+
+<style>
+.sidebar {
+    padding: 20px 0;
+}
+
+.module-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #666;
+    padding: 12px 14px;
+    margin: 20px 0 8px 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.sidebar a {
+    display: block;
+    padding: 10px 14px;
+    color: #333;
+    text-decoration: none;
+    font-size: 13px;
+    border-left: 3px solid transparent;
+    transition: all 0.2s;
+}
+
+.sidebar a:hover {
+    background: #f5f5f5;
+    border-left-color: #0a4a6e;
+    color: #0a4a6e;
+}
+
+.sidebar a[href*="walkin"] {
+    color: #38bdf8;
+    font-weight: 500;
+}
+
+.sidebar a[href*="walkin"]:hover {
+    background: #e0f7ff;
+}
+
+.logout-btn {
+    width: 100%;
+    padding: 10px 14px;
+    background: #c0392b;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    text-align: left;
+    font-weight: 600;
+    transition: 0.2s;
+}
+
+.logout-btn:hover {
+    background: #a93226;
+}
+</style>
+
 
 <!-- MAIN CONTENT -->
 <div class="main">

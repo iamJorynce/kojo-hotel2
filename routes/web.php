@@ -5,6 +5,7 @@ use Illuminate\Http\Request;
 use App\Http\Controllers\RoomController;
 use App\Services\SupabaseService;
 
+
 /*
 |--------------------------------------------------------------------------
 | AUTH MIDDLEWARE
@@ -2384,3 +2385,856 @@ Route::get('/admin/walkin/daytour/{id}/receipt', function ($id, SupabaseService 
     return view('admin.walkin-daytour-receipt', compact('tour'));
 });
 
+Route::get('/admin/walkin/booking', function (SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $rooms = $supabase->getRooms();
+    $cottages = $supabase->getCottages();
+    $equipmentTypes = $supabase->getEquipmentTypes();
+    
+    return view('admin.walkin-booking-pos', compact('rooms', 'cottages', 'equipmentTypes'));
+});
+
+// CREATE BOOKING (Multi-Item)
+Route::post('/admin/walkin/booking/store', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $request->validate([
+        'guest_name'  => 'required|string|max:255',
+        'guest_phone' => 'required|string|max:20',
+        'check_in'    => 'required|date|after_or_equal:today',
+        'check_out'   => 'required|date|after:check_in',
+        'items_json'  => 'required|json',
+    ]);
+    
+    $itemsData = json_decode($request->items_json, true);
+    
+    if (empty($itemsData['rooms']) && empty($itemsData['cottages']) && empty($itemsData['equipment'])) {
+        return back()->withErrors(['items' => 'Please add at least one item']);
+    }
+    
+    $checkIn = $request->check_in;
+    $checkOut = $request->check_out;
+    
+    // CALCULATE NIGHTS
+    $startDate = new DateTime($checkIn);
+    $endDate = new DateTime($checkOut);
+    $nights = $endDate->diff($startDate)->days;
+    if ($nights == 0) $nights = 1;
+    
+    // CALCULATE TOTAL
+    $total = 0;
+    foreach ($itemsData['rooms'] as $room) {
+        $total += (float)($room['subtotal'] ?? 0);
+    }
+    foreach ($itemsData['cottages'] as $cottage) {
+        $total += (float)($cottage['subtotal'] ?? 0);
+    }
+    foreach ($itemsData['equipment'] as $eq) {
+        $total += (float)($eq['subtotal'] ?? 0);
+    }
+    
+    // CREATE TRANSACTION ID
+    $transactionId = $supabase->generateTransactionId('BOOK');
+    
+    // CREATE WALK-IN BOOKING HEADER
+    $bookingResponse = $supabase->createWalkInBooking([
+        'transaction_id'   => $transactionId,
+        'guest_name'       => $request->guest_name,
+        'guest_phone'      => $request->guest_phone,
+        'guest_email'      => $request->guest_email ?? null,
+        'check_in'         => $checkIn,
+        'check_out'        => $checkOut,
+        'number_of_nights' => $nights,
+        'total_amount'     => $total,
+        'paid_amount'      => 0,
+        'balance_amount'   => $total,
+        'payment_status'   => 'unpaid',
+        'booking_status'   => 'confirmed',
+        'notes'            => $request->notes ?? null,
+    ]);
+    
+    if (!$bookingResponse || empty($bookingResponse)) {
+        return back()->withErrors(['error' => 'Failed to create booking']);
+    }
+    
+    $bookingId = $bookingResponse[0]['id'];
+    
+    // ADD ROOM ITEMS
+    foreach ($itemsData['rooms'] as $room) {
+        if (!empty($room['roomId'])) {
+            $supabase->addBookingItem($bookingId, [
+                'item_type'        => 'room',
+                'item_id'          => $room['roomId'],
+                'item_name'        => $room['name'],
+                'number_of_nights' => $room['nights'],
+                'price_per_night'  => $room['pricePerNight'],
+                'quantity'         => 1,
+                'subtotal'         => $room['subtotal'],
+            ]);
+        }
+    }
+    
+    // ADD COTTAGE ITEMS
+    foreach ($itemsData['cottages'] as $cottage) {
+        if (!empty($cottage['cottageId'])) {
+            $supabase->addBookingItem($bookingId, [
+                'item_type'        => 'cottage',
+                'item_id'          => $cottage['cottageId'],
+                'item_name'        => $cottage['name'],
+                'number_of_nights' => $cottage['nights'],
+                'price_per_night'  => $cottage['pricePerNight'],
+                'quantity'         => 1,
+                'subtotal'         => $cottage['subtotal'],
+            ]);
+        }
+    }
+    
+    // ADD EQUIPMENT ITEMS
+    foreach ($itemsData['equipment'] as $eq) {
+        if (!empty($eq['equipmentId'])) {
+            $supabase->addBookingItem($bookingId, [
+                'item_type'       => 'equipment',
+                'item_id'         => $eq['equipmentId'],
+                'item_name'       => $eq['name'],
+                'quantity'        => $eq['quantity'],
+                'price_per_unit'  => $eq['pricePerUnit'],
+                'subtotal'        => $eq['subtotal'],
+            ]);
+        }
+    }
+    
+    // LOG ACTION
+    $supabase->log('walkin_booking_created', [
+        'target_type'  => 'walk_in_booking',
+        'target_id'    => $bookingId,
+        'target_label' => $request->guest_name . ' — ' . $transactionId . ' (' . $nights . ' night' . ($nights > 1 ? 's' : '') . ', ₱' . number_format($total, 2) . ')',
+        'amount'       => $total,
+    ]);
+    
+    return redirect("/admin/walkin/booking/$bookingId/payment")
+        ->with('success', '✅ Booking created! ₱' . number_format($total, 2) . ' for ' . $nights . ' night(s)');
+});
+
+// PAYMENT PAGE
+Route::get('/admin/walkin/booking/{id}/payment', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $booking = $supabase->getBookingWithItems($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    
+    $payments = $supabase->getWalkInPayments($booking['transaction_id']);
+    
+    return view('admin.walkin-booking-payment', compact('booking', 'payments', 'supabase'));
+});
+
+// RECORD PAYMENT
+Route::post('/admin/walkin/booking/{id}/payment', function ($id, Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $request->validate(['cash_received' => 'required|numeric|min:0.01']);
+    
+    $booking = $supabase->getBookingWithItems($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    
+    $cash = (float)$request->cash_received;
+    $total = (float)$booking['total_amount'];
+    $alreadyPaid = (float)($booking['paid_amount'] ?? 0);
+    $balance = $total - $alreadyPaid;
+    
+    if ($cash <= 0) return back()->with('error', 'Invalid amount');
+    if ($cash > $balance) $cash = $balance;
+    
+    $newPaid = $alreadyPaid + $cash;
+    $newBalance = $total - $newPaid;
+    $newStatus = ($newBalance <= 0) ? 'paid' : 'partial';
+    
+    // UPDATE BOOKING
+    $supabase->updateWalkInBooking($id, [
+        'number_of_nights' => $booking['number_of_nights'],
+        'total_amount'     => $booking['total_amount'],
+        'paid_amount'      => $newPaid,
+        'balance_amount'   => $newBalance,
+        'payment_status'   => $newStatus,
+        'booking_status'   => $booking['booking_status'],
+    ]);
+    
+    // RECORD PAYMENT
+    $supabase->recordWalkInPayment([
+        'transaction_id'   => $booking['transaction_id'],
+        'transaction_type' => 'booking',
+        'parent_id'        => $id,
+        'guest_name'       => $booking['guest_name'],
+        'amount_received'  => $cash,
+        'payment_method'   => 'cash',
+        'payment_type'     => $newStatus === 'paid' ? 'full' : 'partial',
+    ]);
+    
+    $supabase->log('walkin_booking_payment', [
+        'target_type'  => 'walk_in_booking',
+        'target_id'    => $id,
+        'target_label' => $booking['guest_name'] . ' — ₱' . number_format($cash, 2),
+        'amount'       => $cash,
+    ]);
+    
+    return back()->with('success', '✅ Payment recorded! ₱' . number_format($cash, 2));
+});
+
+// CHECK-IN
+Route::post('/admin/walkin/booking/{id}/checkin', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $booking = $supabase->getBookingWithItems($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    
+    $supabase->updateWalkInBooking($id, [
+        'number_of_nights' => $booking['number_of_nights'],
+        'total_amount'     => $booking['total_amount'],
+        'paid_amount'      => $booking['paid_amount'],
+        'balance_amount'   => $booking['balance_amount'],
+        'payment_status'   => $booking['payment_status'],
+        'booking_status'   => 'checked_in',
+    ]);
+    
+    $supabase->log('walkin_booking_checkin', [
+        'target_type'  => 'walk_in_booking',
+        'target_id'    => $id,
+        'target_label' => $booking['guest_name'],
+    ]);
+    
+    return back()->with('success', '✅ Guest checked in');
+});
+
+// CHECK-OUT
+Route::post('/admin/walkin/booking/{id}/checkout', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $booking = $supabase->getBookingWithItems($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    
+    $supabase->updateWalkInBooking($id, [
+        'number_of_nights' => $booking['number_of_nights'],
+        'total_amount'     => $booking['total_amount'],
+        'paid_amount'      => $booking['paid_amount'],
+        'balance_amount'   => $booking['balance_amount'],
+        'payment_status'   => $booking['payment_status'],
+        'booking_status'   => 'checked_out',
+    ]);
+    
+    $supabase->log('walkin_booking_checkout', [
+        'target_type'  => 'walk_in_booking',
+        'target_id'    => $id,
+        'target_label' => $booking['guest_name'],
+    ]);
+    
+    return back()->with('success', '✅ Guest checked out');
+});
+
+// VIEW ALL BOOKINGS
+Route::get('/admin/walkin/bookings', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    // For now, get cottage bookings as placeholder
+    $allBookings = $supabase->getCottageBookings() ?? [];
+    $filter = $request->get('filter', 'upcoming');
+    
+    $bookings = collect($allBookings);
+    $today = date('Y-m-d');
+    
+    if ($filter === 'upcoming') {
+        $bookings = $bookings->where('booking_status', 'confirmed')
+                              ->where('check_in', '>=', $today)
+                              ->sortBy('check_in')
+                              ->values();
+    } elseif ($filter === 'checked_in') {
+        $bookings = $bookings->where('booking_status', 'checked_in')->values();
+    } elseif ($filter === 'unpaid') {
+        $bookings = $bookings->where('payment_status', 'unpaid')->values();
+    } else {
+        $bookings = $bookings->sortByDesc('created_at')->values();
+    }
+    
+    return view('admin.walkin-bookings-list', compact('bookings', 'filter'));
+});
+
+// RECEIPT
+Route::get('/admin/walkin/booking/{id}/receipt', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $booking = $supabase->getBookingWithItems($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    
+    return view('admin.walkin-booking-receipt', compact('booking'));
+});
+
+// SHOW POS FORM
+Route::get('/admin/walkin/booking', function (SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $rooms = $supabase->getRooms();
+    $cottages = $supabase->getCottages();
+    $equipmentTypes = $supabase->getEquipmentTypes();
+    
+    return view('admin.walkin-booking-pos', compact('rooms', 'cottages', 'equipmentTypes'));
+});
+
+// CREATE BOOKING (Multi-Item)
+Route::post('/admin/walkin/booking/store', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $request->validate([
+        'guest_name'  => 'required|string|max:255',
+        'guest_phone' => 'required|string|max:20',
+        'check_in'    => 'required|date|after_or_equal:today',
+        'check_out'   => 'required|date|after:check_in',
+        'items_json'  => 'required|json',
+    ]);
+    
+    $itemsData = json_decode($request->items_json, true);
+    
+    if (empty($itemsData['rooms']) && empty($itemsData['cottages']) && empty($itemsData['equipment'])) {
+        return back()->withErrors(['items' => 'Please add at least one item']);
+    }
+    
+    $checkIn = $request->check_in;
+    $checkOut = $request->check_out;
+    
+    // CALCULATE NIGHTS
+    $startDate = new DateTime($checkIn);
+    $endDate = new DateTime($checkOut);
+    $nights = $endDate->diff($startDate)->days;
+    if ($nights == 0) $nights = 1;
+    
+    // CALCULATE TOTAL
+    $total = 0;
+    foreach ($itemsData['rooms'] as $room) {
+        $total += (float)($room['subtotal'] ?? 0);
+    }
+    foreach ($itemsData['cottages'] as $cottage) {
+        $total += (float)($cottage['subtotal'] ?? 0);
+    }
+    foreach ($itemsData['equipment'] as $eq) {
+        $total += (float)($eq['subtotal'] ?? 0);
+    }
+    
+    // CREATE TRANSACTION ID
+    $transactionId = $supabase->generateTransactionId('BOOK');
+    
+    // CREATE WALK-IN BOOKING HEADER
+    $bookingResponse = $supabase->createWalkInBooking([
+        'transaction_id'   => $transactionId,
+        'guest_name'       => $request->guest_name,
+        'guest_phone'      => $request->guest_phone,
+        'guest_email'      => $request->guest_email ?? null,
+        'check_in'         => $checkIn,
+        'check_out'        => $checkOut,
+        'number_of_nights' => $nights,
+        'total_amount'     => $total,
+        'paid_amount'      => 0,
+        'balance_amount'   => $total,
+        'payment_status'   => 'unpaid',
+        'booking_status'   => 'confirmed',
+        'notes'            => $request->notes ?? null,
+    ]);
+    
+    if (!$bookingResponse || empty($bookingResponse)) {
+        return back()->withErrors(['error' => 'Failed to create booking']);
+    }
+    
+    $bookingId = $bookingResponse[0]['id'];
+    
+    // ADD ROOM ITEMS
+    foreach ($itemsData['rooms'] as $room) {
+        if (!empty($room['roomId'])) {
+            $supabase->addBookingItem($bookingId, [
+                'item_type'        => 'room',
+                'item_id'          => $room['roomId'],
+                'item_name'        => $room['name'],
+                'number_of_nights' => $room['nights'],
+                'price_per_night'  => $room['pricePerNight'],
+                'quantity'         => 1,
+                'subtotal'         => $room['subtotal'],
+            ]);
+        }
+    }
+    
+    // ADD COTTAGE ITEMS
+    foreach ($itemsData['cottages'] as $cottage) {
+        if (!empty($cottage['cottageId'])) {
+            $supabase->addBookingItem($bookingId, [
+                'item_type'        => 'cottage',
+                'item_id'          => $cottage['cottageId'],
+                'item_name'        => $cottage['name'],
+                'number_of_nights' => $cottage['nights'],
+                'price_per_night'  => $cottage['pricePerNight'],
+                'quantity'         => 1,
+                'subtotal'         => $cottage['subtotal'],
+            ]);
+        }
+    }
+    
+    // ADD EQUIPMENT ITEMS
+    foreach ($itemsData['equipment'] as $eq) {
+        if (!empty($eq['equipmentId'])) {
+            $supabase->addBookingItem($bookingId, [
+                'item_type'       => 'equipment',
+                'item_id'         => $eq['equipmentId'],
+                'item_name'       => $eq['name'],
+                'quantity'        => $eq['quantity'],
+                'price_per_unit'  => $eq['pricePerUnit'],
+                'subtotal'        => $eq['subtotal'],
+            ]);
+        }
+    }
+    
+    // LOG ACTION
+    $supabase->log('walkin_booking_created', [
+        'target_type'  => 'walk_in_booking',
+        'target_id'    => $bookingId,
+        'target_label' => $request->guest_name . ' — ' . $transactionId . ' (' . $nights . ' night' . ($nights > 1 ? 's' : '') . ', ₱' . number_format($total, 2) . ')',
+        'amount'       => $total,
+    ]);
+    
+    return redirect("/admin/walkin/booking/$bookingId/payment")
+        ->with('success', '✅ Booking created! ₱' . number_format($total, 2) . ' for ' . $nights . ' night(s)');
+});
+
+// PAYMENT PAGE
+Route::get('/admin/walkin/booking/{id}/payment', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $booking = $supabase->getBookingWithItems($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    
+    $payments = $supabase->getWalkInPayments($booking['transaction_id']);
+    
+    return view('admin.walkin-booking-payment', compact('booking', 'payments', 'supabase'));
+});
+
+// RECORD PAYMENT
+Route::post('/admin/walkin/booking/{id}/payment', function ($id, Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $request->validate(['cash_received' => 'required|numeric|min:0.01']);
+    
+    $booking = $supabase->getBookingWithItems($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    
+    $cash = (float)$request->cash_received;
+    $total = (float)$booking['total_amount'];
+    $alreadyPaid = (float)($booking['paid_amount'] ?? 0);
+    $balance = $total - $alreadyPaid;
+    
+    if ($cash <= 0) return back()->with('error', 'Invalid amount');
+    if ($cash > $balance) $cash = $balance;
+    
+    $newPaid = $alreadyPaid + $cash;
+    $newBalance = $total - $newPaid;
+    $newStatus = ($newBalance <= 0) ? 'paid' : 'partial';
+    
+    // UPDATE BOOKING
+    $supabase->updateWalkInBooking($id, [
+        'number_of_nights' => $booking['number_of_nights'],
+        'total_amount'     => $booking['total_amount'],
+        'paid_amount'      => $newPaid,
+        'balance_amount'   => $newBalance,
+        'payment_status'   => $newStatus,
+        'booking_status'   => $booking['booking_status'],
+    ]);
+    
+    // RECORD PAYMENT
+    $supabase->recordWalkInPayment([
+        'transaction_id'   => $booking['transaction_id'],
+        'transaction_type' => 'booking',
+        'parent_id'        => $id,
+        'guest_name'       => $booking['guest_name'],
+        'amount_received'  => $cash,
+        'payment_method'   => 'cash',
+        'payment_type'     => $newStatus === 'paid' ? 'full' : 'partial',
+    ]);
+    
+    $supabase->log('walkin_booking_payment', [
+        'target_type'  => 'walk_in_booking',
+        'target_id'    => $id,
+        'target_label' => $booking['guest_name'] . ' — ₱' . number_format($cash, 2),
+        'amount'       => $cash,
+    ]);
+    
+    return back()->with('success', '✅ Payment recorded! ₱' . number_format($cash, 2));
+});
+
+// CHECK-IN
+Route::post('/admin/walkin/booking/{id}/checkin', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $booking = $supabase->getBookingWithItems($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    
+    $supabase->updateWalkInBooking($id, [
+        'number_of_nights' => $booking['number_of_nights'],
+        'total_amount'     => $booking['total_amount'],
+        'paid_amount'      => $booking['paid_amount'],
+        'balance_amount'   => $booking['balance_amount'],
+        'payment_status'   => $booking['payment_status'],
+        'booking_status'   => 'checked_in',
+    ]);
+    
+    $supabase->log('walkin_booking_checkin', [
+        'target_type'  => 'walk_in_booking',
+        'target_id'    => $id,
+        'target_label' => $booking['guest_name'],
+    ]);
+    
+    return back()->with('success', '✅ Guest checked in');
+});
+
+// CHECK-OUT
+Route::post('/admin/walkin/booking/{id}/checkout', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $booking = $supabase->getBookingWithItems($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    
+    $supabase->updateWalkInBooking($id, [
+        'number_of_nights' => $booking['number_of_nights'],
+        'total_amount'     => $booking['total_amount'],
+        'paid_amount'      => $booking['paid_amount'],
+        'balance_amount'   => $booking['balance_amount'],
+        'payment_status'   => $booking['payment_status'],
+        'booking_status'   => 'checked_out',
+    ]);
+    
+    $supabase->log('walkin_booking_checkout', [
+        'target_type'  => 'walk_in_booking',
+        'target_id'    => $id,
+        'target_label' => $booking['guest_name'],
+    ]);
+    
+    return back()->with('success', '✅ Guest checked out');
+});
+
+// VIEW ALL BOOKINGS
+Route::get('/admin/walkin/bookings', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    // For now, get cottage bookings as placeholder
+    $allBookings = $supabase->getCottageBookings() ?? [];
+    $filter = $request->get('filter', 'upcoming');
+    
+    $bookings = collect($allBookings);
+    $today = date('Y-m-d');
+    
+    if ($filter === 'upcoming') {
+        $bookings = $bookings->where('booking_status', 'confirmed')
+                              ->where('check_in', '>=', $today)
+                              ->sortBy('check_in')
+                              ->values();
+    } elseif ($filter === 'checked_in') {
+        $bookings = $bookings->where('booking_status', 'checked_in')->values();
+    } elseif ($filter === 'unpaid') {
+        $bookings = $bookings->where('payment_status', 'unpaid')->values();
+    } else {
+        $bookings = $bookings->sortByDesc('created_at')->values();
+    }
+    
+    return view('admin.walkin-bookings-list', compact('bookings', 'filter'));
+});
+
+// RECEIPT
+Route::get('/admin/walkin/booking/{id}/receipt', function ($id, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $booking = $supabase->getBookingWithItems($id);
+    if (!$booking) return back()->with('error', 'Booking not found');
+    
+    return view('admin.walkin-booking-receipt', compact('booking'));
+});
+
+
+
+
+// REPLACE the /admin/walkin/pos route with this (uses direct HTTP calls):
+
+Route::get('/admin/walkin/pos', function () {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $supabaseUrl = env('SUPABASE_URL');
+    $supabaseKey = env('SUPABASE_KEY');
+    $headers = [
+        'apikey' => $supabaseKey,
+        'Authorization' => 'Bearer ' . $supabaseKey,
+        'Content-Type' => 'application/json'
+    ];
+    
+    // Fetch data
+    try {
+        $rooms = \Illuminate\Support\Facades\Http::withHeaders($headers)
+            ->get("$supabaseUrl/rest/v1/rooms")
+            ->json() ?? [];
+    } catch (\Exception $e) {
+        $rooms = [];
+    }
+    
+    try {
+        $cottages = \Illuminate\Support\Facades\Http::withHeaders($headers)
+            ->get("$supabaseUrl/rest/v1/cottages")
+            ->json() ?? [];
+    } catch (\Exception $e) {
+        $cottages = [];
+    }
+    
+    try {
+        $dayTourPackages = \Illuminate\Support\Facades\Http::withHeaders($headers)
+            ->get("$supabaseUrl/rest/v1/day_tour_packages")
+            ->json() ?? [];
+    } catch (\Exception $e) {
+        $dayTourPackages = [];
+    }
+    
+    try {
+        $equipmentTypes = \Illuminate\Support\Facades\Http::withHeaders($headers)
+            ->get("$supabaseUrl/rest/v1/equipment_types")
+            ->json() ?? [];
+    } catch (\Exception $e) {
+        $equipmentTypes = [];
+    }
+    
+    return view('admin.walkin-pos-unified', compact(
+        'rooms', 'cottages', 'dayTourPackages', 'equipmentTypes'
+    ));
+});
+
+
+
+
+// ===== CREATE TRANSACTION (All types) =====
+Route::post('/admin/walkin/create', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $request->validate([
+        'guest_name'      => 'required|string|max:255',
+        'guest_phone'     => 'required|string|max:20',
+        'transaction_type' => 'required|in:day_tour,booking,equipment',
+        'items_json'      => 'required|json',
+    ]);
+    
+    $itemsData = json_decode($request->items_json, true);
+    $type = $request->transaction_type;
+    
+    if (empty($itemsData['packages']) && empty($itemsData['rooms']) && empty($itemsData['equipment'])) {
+        return back()->withErrors(['items' => 'Please add at least one item']);
+    }
+    
+    // Calculate total
+    $total = 0;
+    foreach ($itemsData['packages'] ?? [] as $pkg) $total += (float)($pkg['subtotal'] ?? 0);
+    foreach ($itemsData['rooms'] ?? [] as $room) $total += (float)($room['subtotal'] ?? 0);
+    foreach ($itemsData['equipment'] ?? [] as $eq) $total += (float)($eq['subtotal'] ?? 0);
+    
+    // Create transaction
+    $transactionId = $supabase->generateTransactionId('TRANS');
+    
+    $txData = [
+        'transaction_id'    => $transactionId,
+        'transaction_type'  => $type,
+        'guest_name'        => $request->guest_name,
+        'guest_phone'       => $request->guest_phone,
+        'guest_email'       => $request->guest_email,
+        'total_amount'      => $total,
+        'paid_amount'       => 0,
+        'balance_amount'    => $total,
+        'payment_status'    => 'unpaid',
+        'transaction_status' => 'pending',
+        'notes'             => $request->notes,
+    ];
+    
+    if ($type === 'booking') {
+        $checkIn = $request->check_in;
+        $checkOut = $request->check_out;
+        $startDate = new DateTime($checkIn);
+        $endDate = new DateTime($checkOut);
+        $nights = $endDate->diff($startDate)->days;
+        if ($nights == 0) $nights = 1;
+        
+        $txData['check_in'] = $checkIn;
+        $txData['check_out'] = $checkOut;
+        $txData['number_of_nights'] = $nights;
+    }
+    
+    $response = $supabase->createWalkInTransaction($txData);
+    if (empty($response)) {
+        return back()->withErrors(['error' => 'Failed to create transaction']);
+    }
+    
+    $txId = $response[0]['id'];
+    
+    // Add items
+    foreach ($itemsData['packages'] ?? [] as $pkg) {
+        $supabase->addTransactionItem($transactionId, [
+            'item_type'      => 'package',
+            'item_id'        => $pkg['pkgId'],
+            'item_name'      => $pkg['name'],
+            'guest_count'    => $pkg['guestCount'],
+            'price_per_unit' => $pkg['pricePerUnit'],
+            'subtotal'       => $pkg['subtotal'],
+        ]);
+    }
+    
+    foreach ($itemsData['rooms'] ?? [] as $room) {
+        if (!empty($room['roomId'])) {
+            $supabase->addTransactionItem($transactionId, [
+                'item_type'       => 'room',
+                'item_id'         => $room['roomId'],
+                'item_name'       => $room['name'],
+                'number_of_nights' => $room['nights'],
+                'price_per_unit'  => $room['pricePerNight'],
+                'subtotal'        => $room['subtotal'],
+            ]);
+        }
+    }
+    
+    foreach ($itemsData['equipment'] ?? [] as $eq) {
+        if (!empty($eq['equipId'])) {
+            $supabase->addTransactionItem($transactionId, [
+                'item_type'      => 'equipment',
+                'item_id'        => $eq['equipId'],
+                'item_name'      => $eq['name'],
+                'quantity'       => $eq['quantity'],
+                'price_per_unit' => $eq['pricePerUnit'],
+                'subtotal'       => $eq['subtotal'],
+            ]);
+        }
+    }
+    
+    $supabase->log('transaction_created', [
+        'target_type'  => 'walk_in_transaction',
+        'target_id'    => $transactionId,
+        'target_label' => $request->guest_name . ' — ' . $type . ' (₱' . number_format($total, 2) . ')',
+        'amount'       => $total,
+    ]);
+    
+    return redirect("/admin/walkin/payment/$transactionId")
+        ->with('success', '✅ Transaction created! ₱' . number_format($total, 2));
+});
+
+// ===== PAYMENT PAGE =====
+Route::get('/admin/walkin/payment/{transactionId}', function ($transactionId, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $transaction = $supabase->getTransactionWithItems($transactionId);
+    if (!$transaction) return back()->with('error', 'Transaction not found');
+    
+    $payments = $supabase->getTransactionPayments($transaction['transaction_id']);
+    
+    return view('admin.walkin-payment', compact('transaction', 'payments'));
+});
+
+// ===== RECORD PAYMENT =====
+Route::post('/admin/walkin/payment/{transactionId}', function ($transactionId, Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $request->validate(['cash_received' => 'required|numeric|min:0.01']);
+    
+    $transaction = $supabase->getTransactionWithItems($transactionId);
+    if (!$transaction) return back()->with('error', 'Transaction not found');
+    
+    $cash = (float)$request->cash_received;
+    $total = (float)$transaction['total_amount'];
+    $alreadyPaid = (float)($transaction['paid_amount'] ?? 0);
+    $balance = $total - $alreadyPaid;
+    
+    if ($cash <= 0) return back()->with('error', 'Invalid amount');
+    if ($cash > $balance) $cash = $balance;
+    
+    $newPaid = $alreadyPaid + $cash;
+    $newBalance = $total - $newPaid;
+    $newStatus = ($newBalance <= 0) ? 'paid' : 'partial';
+    
+    // Update transaction
+    $supabase->updateWalkInTransaction($transaction['transaction_id'], [
+        'paid_amount'    => $newPaid,
+        'balance_amount' => $newBalance,
+        'payment_status' => $newStatus,
+    ]);
+    
+    // Record payment
+    $supabase->recordWalkInPayment([
+        'transaction_id' => $transaction['transaction_id'],
+        'amount_received' => $cash,
+        'payment_method' => 'cash',
+        'payment_type'   => $newStatus === 'paid' ? 'full' : 'partial',
+        'staff_id'       => session('admin_id'),
+        'staff_name'     => session('admin_name'),
+    ]);
+    
+    $supabase->log('payment_recorded', [
+        'target_type'  => 'walk_in_transaction',
+        'target_id'    => $transaction['transaction_id'],
+        'target_label' => $transaction['guest_name'] . ' — ₱' . number_format($cash, 2),
+        'amount'       => $cash,
+    ]);
+    
+    return back()->with('success', '✅ Payment recorded! ₱' . number_format($cash, 2));
+});
+
+// ===== CHECK-IN (for bookings) =====
+Route::post('/admin/walkin/{transactionId}/checkin', function ($transactionId, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $transaction = $supabase->getTransactionWithItems($transactionId);
+    if (!$transaction) return back()->with('error', 'Transaction not found');
+    
+    $supabase->updateWalkInTransaction($transaction['transaction_id'], [
+        'transaction_status' => 'checked_in',
+    ]);
+    
+    $supabase->log('checkin', [
+        'target_type' => 'walk_in_transaction',
+        'target_id'   => $transaction['transaction_id'],
+        'target_label' => $transaction['guest_name'],
+    ]);
+    
+    return back()->with('success', '✅ Guest checked in');
+});
+
+// ===== CHECK-OUT (for bookings) =====
+Route::post('/admin/walkin/{transactionId}/checkout', function ($transactionId, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $transaction = $supabase->getTransactionWithItems($transactionId);
+    if (!$transaction) return back()->with('error', 'Transaction not found');
+    
+    $supabase->updateWalkInTransaction($transaction['transaction_id'], [
+        'transaction_status' => 'checked_out',
+    ]);
+    
+    $supabase->log('checkout', [
+        'target_type' => 'walk_in_transaction',
+        'target_id'   => $transaction['transaction_id'],
+        'target_label' => $transaction['guest_name'],
+    ]);
+    
+    return back()->with('success', '✅ Guest checked out');
+});
+
+// ===== TRANSACTIONS LIST =====
+Route::get('/admin/walkin/transactions', function (Request $request, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $type = $request->get('type');
+    $status = $request->get('status');
+    
+    $transactions = $supabase->getAllTransactions($type, $status);
+    
+    return view('admin.walkin-transactions-list', compact('transactions', 'type', 'status'));
+});
+
+// ===== RECEIPT =====
+Route::get('/admin/walkin/{transactionId}/receipt', function ($transactionId, SupabaseService $supabase) {
+    if (!session('admin_logged_in')) return redirect('/admin/login');
+    
+    $transaction = $supabase->getTransactionWithItems($transactionId);
+    if (!$transaction) return back()->with('error', 'Transaction not found');
+    
+    return view('admin.walkin-receipt', compact('transaction'));
+});
