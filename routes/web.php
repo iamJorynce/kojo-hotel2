@@ -2951,8 +2951,6 @@ Route::get('/admin/walkin/booking/{id}/receipt', function ($id, SupabaseService 
 });
 
 
-
-
 // REPLACE the /admin/walkin/pos route with this (uses direct HTTP calls):
 
 Route::get('/admin/walkin/pos', function () {
@@ -2963,42 +2961,79 @@ Route::get('/admin/walkin/pos', function () {
     $headers = [
         'apikey' => $supabaseKey,
         'Authorization' => 'Bearer ' . $supabaseKey,
-        'Content-Type' => 'application/json'
+        'Content-Type' => 'application/json',
     ];
     
-    // Fetch data
+    // ===== FETCH ROOMS =====
+    $rooms = [];
     try {
-        $rooms = \Illuminate\Support\Facades\Http::withHeaders($headers)
-            ->get("$supabaseUrl/rest/v1/rooms")
-            ->json() ?? [];
+        $response = \Illuminate\Support\Facades\Http::withHeaders($headers)
+            ->timeout(10)
+            ->get("$supabaseUrl/rest/v1/rooms?select=*");
+        
+        if ($response->successful()) {
+            $rooms = $response->json() ?? [];
+            // Add default price
+            foreach ($rooms as &$room) {
+                $room['price_per_night'] = 200;
+            }
+        }
     } catch (\Exception $e) {
+        \Log::error('Rooms fetch failed: ' . $e->getMessage());
         $rooms = [];
     }
     
+    // ===== FETCH COTTAGES =====
+    $cottages = [];
     try {
-        $cottages = \Illuminate\Support\Facades\Http::withHeaders($headers)
-            ->get("$supabaseUrl/rest/v1/cottages")
-            ->json() ?? [];
+        $response = \Illuminate\Support\Facades\Http::withHeaders($headers)
+            ->timeout(10)
+            ->get("$supabaseUrl/rest/v1/cottages?select=*");
+        
+        if ($response->successful()) {
+            $cottages = $response->json() ?? [];
+        }
     } catch (\Exception $e) {
+        \Log::error('Cottages fetch failed: ' . $e->getMessage());
         $cottages = [];
     }
     
+    // ===== FETCH DAY TOUR PACKAGES =====
+    $dayTourPackages = [];
     try {
-        $dayTourPackages = \Illuminate\Support\Facades\Http::withHeaders($headers)
-            ->get("$supabaseUrl/rest/v1/day_tour_packages")
-            ->json() ?? [];
+        $response = \Illuminate\Support\Facades\Http::withHeaders($headers)
+            ->timeout(10)
+            ->get("$supabaseUrl/rest/v1/day_tour_packages?select=*");
+        
+        if ($response->successful()) {
+            $dayTourPackages = $response->json() ?? [];
+        }
     } catch (\Exception $e) {
+        \Log::error('Packages fetch failed: ' . $e->getMessage());
         $dayTourPackages = [];
     }
     
+    // ===== FETCH EQUIPMENT ===== (WITH DEBUG)
+    $equipmentTypes = [];
     try {
-        $equipmentTypes = \Illuminate\Support\Facades\Http::withHeaders($headers)
-            ->get("$supabaseUrl/rest/v1/equipment_types")
-            ->json() ?? [];
+        $response = \Illuminate\Support\Facades\Http::withHeaders($headers)
+            ->timeout(10)
+            ->get("$supabaseUrl/rest/v1/equipment_types?select=*");
+        
+        if ($response->successful()) {
+            $equipmentTypes = $response->json() ?? [];
+            \Log::info('Equipment loaded: ' . count($equipmentTypes) . ' items');
+            \Log::info('First equipment: ' . json_encode($equipmentTypes[0] ?? []));
+        } else {
+            \Log::error('Equipment response not successful: ' . $response->status());
+            \Log::error('Equipment response: ' . $response->body());
+        }
     } catch (\Exception $e) {
+        \Log::error('Equipment fetch failed: ' . $e->getMessage());
         $equipmentTypes = [];
     }
     
+    // Pass to blade
     return view('admin.walkin-pos-unified', compact(
         'rooms', 'cottages', 'dayTourPackages', 'equipmentTypes'
     ));
@@ -3007,47 +3042,175 @@ Route::get('/admin/walkin/pos', function () {
 
 
 
+
 // ===== CREATE TRANSACTION (All types) =====
+/**
+ * POST /admin/walkin/create
+ * Creates a walk-in transaction (day tour, booking, or equipment)
+ * Includes double-booking prevention for rooms/cottages
+ * Includes equipment inventory deduction
+ */
+
 Route::post('/admin/walkin/create', function (Request $request, SupabaseService $supabase) {
     if (!session('admin_logged_in')) return redirect('/admin/login');
     
+    // ===== VALIDATION =====
     $request->validate([
-        'guest_name'      => 'required|string|max:255',
-        'guest_phone'     => 'required|string|max:20',
-        'transaction_type' => 'required|in:day_tour,booking,equipment',
-        'items_json'      => 'required|json',
+        'guest_name'        => 'required|string|max:255',
+        'guest_phone'       => 'required|string|max:20',
+        'transaction_type'  => 'required|in:day_tour,booking,equipment',
+        'items_json'        => 'required|json',
     ]);
     
-    $itemsData = json_decode($request->items_json, true);
     $type = $request->transaction_type;
+    $itemsData = json_decode($request->items_json, true);
     
-    if (empty($itemsData['packages']) && empty($itemsData['rooms']) && empty($itemsData['equipment'])) {
+    // ===== VALIDATE BOOKING-SPECIFIC DATA =====
+    if ($type === 'booking') {
+        $request->validate([
+            'check_in'  => 'required|date',
+            'check_out' => 'required|date|after:check_in',
+        ], [
+            'check_out.after' => 'Check-out must be after check-in',
+        ]);
+        
+        $checkIn = new DateTime($request->check_in);
+        $checkOut = new DateTime($request->check_out);
+        $today = new DateTime('today');
+        
+        // No past check-in dates
+        if ($checkIn < $today) {
+            return back()->withErrors(['check_in' => 'Check-in cannot be in the past']);
+        }
+    }
+    
+    // ===== CHECK IF ITEMS EXIST =====
+    if (empty($itemsData['packages']) && empty($itemsData['rooms']) && empty($itemsData['cottages']) && empty($itemsData['equipment'])) {
         return back()->withErrors(['items' => 'Please add at least one item']);
     }
     
-    // Calculate total
-    $total = 0;
-    foreach ($itemsData['packages'] ?? [] as $pkg) $total += (float)($pkg['subtotal'] ?? 0);
-    foreach ($itemsData['rooms'] ?? [] as $room) $total += (float)($room['subtotal'] ?? 0);
-    foreach ($itemsData['equipment'] ?? [] as $eq) $total += (float)($eq['subtotal'] ?? 0);
+    // ===== DOUBLE BOOKING CHECK (for BOOKINGS only) =====
+    if ($type === 'booking') {
+        $checkIn = $request->check_in;
+        $checkOut = $request->check_out;
+        $checkInDate = new DateTime($checkIn);
+        $checkOutDate = new DateTime($checkOut);
+        
+        // Get all confirmed/checked-in bookings
+        $existingTransactions = collect($supabase->getAllTransactions('booking'));
+        
+        // CHECK ROOMS FOR CONFLICTS
+        foreach ($itemsData['rooms'] ?? [] as $roomItem) {
+            if (empty($roomItem['roomId'])) continue;
+            
+            $roomId = $roomItem['roomId'];
+            
+            // Look for conflicting bookings
+            $conflict = $existingTransactions->contains(function ($tx) use ($roomId, $checkInDate, $checkOutDate) {
+                // Only check confirmed/checked-in transactions
+                if (!in_array($tx['transaction_status'] ?? '', ['pending', 'checked_in', 'confirmed'])) {
+                    return false;
+                }
+                
+                // Get items for this transaction
+                $items = $tx['items'] ?? [];
+                $hasConflictingRoom = false;
+                
+                foreach ($items as $item) {
+                    if (($item['item_type'] ?? '') === 'room' && ($item['item_id'] ?? '') == $roomId) {
+                        $hasConflictingRoom = true;
+                        break;
+                    }
+                }
+                
+                if (!$hasConflictingRoom) return false;
+                
+                // Check date overlap
+                $existingCheckIn = new DateTime($tx['check_in'] ?? '');
+                $existingCheckOut = new DateTime($tx['check_out'] ?? '');
+                
+                return $checkInDate < $existingCheckOut && $checkOutDate > $existingCheckIn;
+            });
+            
+            if ($conflict) {
+                $roomName = $roomItem['name'] ?? 'Room';
+                return back()->withErrors(['rooms' => "❌ $roomName is already booked for these dates!"]);
+            }
+        }
+        
+        // CHECK COTTAGES FOR CONFLICTS
+        foreach ($itemsData['cottages'] ?? [] as $cottageItem) {
+            if (empty($cottageItem['roomId'])) continue;  // Note: cottages use 'roomId' from blade
+            
+            $cottageId = $cottageItem['roomId'];
+            
+            // Look for conflicting bookings
+            $conflict = $existingTransactions->contains(function ($tx) use ($cottageId, $checkInDate, $checkOutDate) {
+                // Only check confirmed/checked-in transactions
+                if (!in_array($tx['transaction_status'] ?? '', ['pending', 'checked_in', 'confirmed'])) {
+                    return false;
+                }
+                
+                // Get items for this transaction
+                $items = $tx['items'] ?? [];
+                $hasConflictingCottage = false;
+                
+                foreach ($items as $item) {
+                    if (($item['item_type'] ?? '') === 'cottage' && ($item['item_id'] ?? '') == $cottageId) {
+                        $hasConflictingCottage = true;
+                        break;
+                    }
+                }
+                
+                if (!$hasConflictingCottage) return false;
+                
+                // Check date overlap
+                $existingCheckIn = new DateTime($tx['check_in'] ?? '');
+                $existingCheckOut = new DateTime($tx['check_out'] ?? '');
+                
+                return $checkInDate < $existingCheckOut && $checkOutDate > $existingCheckIn;
+            });
+            
+            if ($conflict) {
+                $cottageName = $cottageItem['name'] ?? 'Cottage';
+                return back()->withErrors(['cottages' => "❌ $cottageName is already booked for these dates!"]);
+            }
+        }
+    }
     
-    // Create transaction
+    // ===== CALCULATE TOTAL =====
+    $total = 0;
+    foreach ($itemsData['packages'] ?? [] as $pkg) {
+        $total += (float)($pkg['subtotal'] ?? 0);
+    }
+    foreach ($itemsData['rooms'] ?? [] as $room) {
+        $total += (float)($room['subtotal'] ?? 0);
+    }
+    foreach ($itemsData['cottages'] ?? [] as $cottage) {
+        $total += (float)($cottage['subtotal'] ?? 0);
+    }
+    foreach ($itemsData['equipment'] ?? [] as $eq) {
+        $total += (float)($eq['subtotal'] ?? 0);
+    }
+    
+    // ===== CREATE TRANSACTION =====
     $transactionId = $supabase->generateTransactionId('TRANS');
     
     $txData = [
-        'transaction_id'    => $transactionId,
-        'transaction_type'  => $type,
-        'guest_name'        => $request->guest_name,
-        'guest_phone'       => $request->guest_phone,
-        'guest_email'       => $request->guest_email,
-        'total_amount'      => $total,
-        'paid_amount'       => 0,
-        'balance_amount'    => $total,
-        'payment_status'    => 'unpaid',
+        'transaction_id'     => $transactionId,
+        'transaction_type'   => $type,
+        'guest_name'         => $request->guest_name,
+        'guest_phone'        => $request->guest_phone,
+        'guest_email'        => $request->guest_email ?? null,
+        'total_amount'       => $total,
+        'paid_amount'        => 0,
+        'balance_amount'     => $total,
+        'payment_status'     => 'unpaid',
         'transaction_status' => 'pending',
-        'notes'             => $request->notes,
+        'notes'              => $request->notes ?? null,
     ];
     
+    // Add booking-specific data
     if ($type === 'booking') {
         $checkIn = $request->check_in;
         $checkOut = $request->check_out;
@@ -3061,6 +3224,7 @@ Route::post('/admin/walkin/create', function (Request $request, SupabaseService 
         $txData['number_of_nights'] = $nights;
     }
     
+    // Create the transaction record
     $response = $supabase->createWalkInTransaction($txData);
     if (empty($response)) {
         return back()->withErrors(['error' => 'Failed to create transaction']);
@@ -3068,7 +3232,9 @@ Route::post('/admin/walkin/create', function (Request $request, SupabaseService 
     
     $txId = $response[0]['id'];
     
-    // Add items
+    // ===== ADD ITEMS =====
+    
+    // Add packages
     foreach ($itemsData['packages'] ?? [] as $pkg) {
         $supabase->addTransactionItem($transactionId, [
             'item_type'      => 'package',
@@ -3080,21 +3246,38 @@ Route::post('/admin/walkin/create', function (Request $request, SupabaseService 
         ]);
     }
     
+    // Add rooms
     foreach ($itemsData['rooms'] ?? [] as $room) {
         if (!empty($room['roomId'])) {
             $supabase->addTransactionItem($transactionId, [
-                'item_type'       => 'room',
-                'item_id'         => $room['roomId'],
-                'item_name'       => $room['name'],
+                'item_type'        => 'room',
+                'item_id'          => $room['roomId'],
+                'item_name'        => $room['name'],
                 'number_of_nights' => $room['nights'],
-                'price_per_unit'  => $room['pricePerNight'],
-                'subtotal'        => $room['subtotal'],
+                'price_per_unit'   => $room['pricePerNight'],
+                'subtotal'         => $room['subtotal'],
             ]);
         }
     }
     
+    // Add cottages
+    foreach ($itemsData['cottages'] ?? [] as $cottage) {
+        if (!empty($cottage['roomId'])) {
+            $supabase->addTransactionItem($transactionId, [
+                'item_type'        => 'cottage',
+                'item_id'          => $cottage['roomId'],
+                'item_name'        => $cottage['name'],
+                'number_of_nights' => $cottage['nights'],
+                'price_per_unit'   => $cottage['pricePerNight'],
+                'subtotal'         => $cottage['subtotal'],
+            ]);
+        }
+    }
+    
+    // ===== ADD EQUIPMENT & DEDUCT INVENTORY =====
     foreach ($itemsData['equipment'] ?? [] as $eq) {
         if (!empty($eq['equipId'])) {
+            // Add item
             $supabase->addTransactionItem($transactionId, [
                 'item_type'      => 'equipment',
                 'item_id'        => $eq['equipId'],
@@ -3103,9 +3286,39 @@ Route::post('/admin/walkin/create', function (Request $request, SupabaseService 
                 'price_per_unit' => $eq['pricePerUnit'],
                 'subtotal'       => $eq['subtotal'],
             ]);
+            
+            // DEDUCT INVENTORY ✅
+            try {
+                $supabaseUrl = env('SUPABASE_URL');
+                $supabaseKey = env('SUPABASE_KEY');
+                $headers = [
+                    'apikey' => $supabaseKey,
+                    'Authorization' => 'Bearer ' . $supabaseKey,
+                ];
+                
+                // Get current quantity
+                $currentQty = \Illuminate\Support\Facades\Http::withHeaders($headers)
+                    ->get("$supabaseUrl/rest/v1/equipment_types?id=eq." . $eq['equipId'])
+                    ->json();
+                
+                if (!empty($currentQty) && is_array($currentQty)) {
+                    $available = (int)($currentQty[0]['quantity_available'] ?? 0);
+                    $newQty = max(0, $available - (int)($eq['quantity'] ?? 1));
+                    
+                    // Update quantity
+                    \Illuminate\Support\Facades\Http::withHeaders(array_merge($headers, ['Prefer' => 'return=representation']))
+                        ->patch("$supabaseUrl/rest/v1/equipment_types?id=eq." . $eq['equipId'], [
+                            'quantity_available' => $newQty
+                        ])
+                        ->json();
+                }
+            } catch (\Exception $e) {
+                \Log::warning('Equipment inventory deduction failed: ' . $e->getMessage());
+            }
         }
     }
     
+    // ===== LOG ACTION =====
     $supabase->log('transaction_created', [
         'target_type'  => 'walk_in_transaction',
         'target_id'    => $transactionId,
@@ -3113,6 +3326,7 @@ Route::post('/admin/walkin/create', function (Request $request, SupabaseService 
         'amount'       => $total,
     ]);
     
+    // ===== REDIRECT TO PAYMENT =====
     return redirect("/admin/walkin/payment/$transactionId")
         ->with('success', '✅ Transaction created! ₱' . number_format($total, 2));
 });

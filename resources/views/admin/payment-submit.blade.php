@@ -23,14 +23,14 @@
     <div class="alert-error">{{ session('error') }}</div>
 @endif
 
-@if($submitted)
+@if($submitted && is_array($submitted))
 <div style="background:#e8f5e9;border:2px solid #1a6b3c;padding:16px;border-radius:10px;margin-bottom:20px;">
     <p style="margin:0;font-weight:600;color:#1a6b3c;">✅ Already Submitted</p>
     <p style="font-size:12px;color:#666;margin:4px 0 0 0;">
-        Submitted at {{ date('M d, Y h:i A', strtotime($submitted['created_at'])) }}
-        — Status: <strong>{{ strtoupper($submitted['status']) }}</strong>
+        Submitted at {{ date('M d, Y h:i A', strtotime($submitted['created_at'] ?? now())) }}
+        — Status: <strong>{{ strtoupper($submitted['status'] ?? 'PENDING') }}</strong>
     </p>
-    @if($submitted['status'] === 'approved')
+    @if(isset($submitted['status']) && $submitted['status'] === 'approved')
     <p style="font-size:12px;color:#1a6b3c;margin:4px 0 0 0;">✓ Approved by {{ $submitted['admin_name'] ?? 'Admin' }}</p>
     @endif
 </div>

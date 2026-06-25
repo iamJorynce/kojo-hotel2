@@ -4,55 +4,127 @@
     <title>Admin Dashboard - Sea Eagle Beach Resort</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    {{-- FIX: load FullCalendar CSS only once here (booking-calendar also loaded it, causing duplicate) --}}
     <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.css" rel="stylesheet">
 
     <style>
-        body {
+        * {
             margin: 0;
-            font-family: Arial, sans-serif;
-            background: #f4f6f9;
+            padding: 0;
+            box-sizing: border-box;
         }
 
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f7fa;
+            color: #2c3e50;
+        }
+
+        /* ===== BRIGHT SIDEBAR ===== */
         .sidebar {
             position: fixed;
             width: 250px;
             height: 100vh;
-            background: #0f172a;
-            color: white;
-            padding: 20px;
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+            color: #2c3e50;
+            padding: 0;
             overflow-y: auto;
             z-index: 100;
+            border-right: 2px solid #e8ecf1;
+            box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
         }
 
-        .sidebar h2 { color: #38bdf8; margin-bottom: 25px; }
+        .sidebar h2 {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            margin: 0;
+            font-size: 18px;
+            border-bottom: 2px solid #e8ecf1;
+            text-align: center;
+        }
 
         .module-title {
             font-size: 11px;
-            color: #94a3b8;
-            margin-top: 18px;
-            margin-bottom: 8px;
-            letter-spacing: 1px;
+            font-weight: 700;
+            color: #667eea;
+            padding: 14px 16px 8px 16px;
+            margin: 16px 0 8px 0;
             text-transform: uppercase;
+            letter-spacing: 0.8px;
+            border-bottom: 1px solid #e8ecf1;
         }
 
         .sidebar a {
             display: block;
-            color: #cbd5e1;
+            padding: 11px 16px;
+            color: #2c3e50;
             text-decoration: none;
-            margin: 5px 0;
-            padding: 10px;
-            border-radius: 8px;
-            transition: 0.2s;
-            font-size: 14px;
+            font-size: 13px;
+            font-weight: 500;
+            border-left: 3px solid transparent;
+            transition: all 0.25s ease;
+            margin: 0 8px;
+            border-radius: 4px;
         }
 
-        .sidebar a:hover { background: #1e293b; color: white; }
-        .sidebar a.active { background: #0ea5e9; color: white; }
+        .sidebar a:hover {
+            background: #f0f4ff;
+            border-left-color: #667eea;
+            color: #667eea;
+            transform: translateX(4px);
+        }
 
+        /* ===== HIGHLIGHT UNIFIED POS ===== */
+        .pos-section {
+            background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+            color: #667eea;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+            margin: 16px 8px 8px 8px !important;
+            padding: 12px 14px !important;
+            border-bottom: none !important;
+            box-shadow: 0 2px 6px rgba(102, 126, 234, 0.08);
+        }
+
+        .sidebar a.pos-link {
+            background: #f0f4ff;
+            color: #667eea;
+            font-weight: 600;
+            border-left-color: #667eea;
+            margin: 4px 8px !important;
+        }
+
+        .sidebar a.pos-link:hover {
+            background: #e8ecff;
+            color: #5568d3;
+        }
+
+        .logout-btn {
+            width: calc(100% - 16px);
+            padding: 11px 14px;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.25s ease;
+            margin: 8px;
+            box-shadow: 0 2px 6px rgba(255, 107, 107, 0.15);
+        }
+
+        .logout-btn:hover {
+            background: linear-gradient(135deg, #ff5252 0%, #ee3d3a 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 107, 107, 0.25);
+        }
+
+        /* ===== MAIN CONTENT ===== */
         .main {
             margin-left: 270px;
             padding: 25px;
+            min-height: 100vh;
         }
 
         .topbar {
@@ -62,66 +134,76 @@
             margin-bottom: 20px;
         }
 
+        .topbar h2 {
+            color: #2c3e50;
+            font-size: 24px;
+            font-weight: 600;
+        }
+
         .card {
             background: white;
             padding: 18px;
             border-radius: 12px;
             margin-bottom: 15px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            border: 1px solid #e8ecf1;
         }
 
         .btn {
             display: inline-block;
-            background: #0f172a;
+            background: #667eea;
             color: white;
-            padding: 8px 12px;
+            padding: 10px 16px;
             border-radius: 6px;
             text-decoration: none;
             font-size: 13px;
             cursor: pointer;
             border: none;
+            font-weight: 600;
+            transition: all 0.2s ease;
         }
 
-        .btn:hover { background: #1e293b; }
-        .btn-danger { background: #ef4444; }
-        .btn-danger:hover { background: #dc2626; }
-        .btn-success { background: #16a34a; }
-        .btn-warning { background: #d97706; }
-        .btn-primary { background: #0a4a6e; }
+        .btn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.25);
+        }
 
+        .btn-danger { background: #ff6b6b; }
+        .btn-danger:hover { background: #ff5252; }
+        .btn-success { background: #51cf66; }
+        .btn-success:hover { background: #40c057; }
+        .btn-warning { background: #ffd43b; color: #2c3e50; }
+        .btn-warning:hover { background: #ffca3d; }
+        .btn-primary { background: #667eea; }
+        .btn-primary:hover { background: #5568d3; }
+
+        /* ===== FORMS ===== */
         input, select, textarea {
             width: 100%;
-            padding: 10px;
+            padding: 10px 12px;
             margin-bottom: 12px;
             border: 1px solid #ddd;
             border-radius: 8px;
             font-size: 14px;
-            box-sizing: border-box;
+            font-family: inherit;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
 
         label {
             display: block;
             font-size: 13px;
             color: #555;
-            margin-bottom: 4px;
-            font-weight: 500;
+            margin-bottom: 6px;
+            font-weight: 600;
         }
 
-        .logout-btn {
-            width: 100%;
-            background: #ef4444;
-            color: white;
-            border: none;
-            padding: 10px;
-            border-radius: 8px;
-            cursor: pointer;
-            margin-top: 25px;
-            font-size: 14px;
-        }
-
-        .logout-btn:hover { background: #dc2626; }
-
-        /* TOAST */
+        /* ===== ALERTS ===== */
         #toast {
             position: fixed;
             top: 20px;
@@ -132,301 +214,138 @@
             display: none;
             z-index: 9999;
             font-size: 14px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            font-weight: 600;
         }
 
         .alert-success {
             background: #d1fae5;
             color: #065f46;
-            padding: 10px 14px;
+            padding: 12px 16px;
             border-radius: 8px;
             margin-bottom: 15px;
+            border-left: 4px solid #10b981;
         }
 
         .alert-error {
             background: #fee2e2;
             color: #991b1b;
-            padding: 10px 14px;
+            padding: 12px 16px;
             border-radius: 8px;
             margin-bottom: 15px;
+            border-left: 4px solid #ef4444;
+        }
+
+        /* ===== SCROLLBAR ===== */
+        .sidebar::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .sidebar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .sidebar::-webkit-scrollbar-thumb {
+            background: #d0d8e6;
+            border-radius: 3px;
+        }
+
+        .sidebar::-webkit-scrollbar-thumb:hover {
+            background: #b8c1d6;
         }
     </style>
 </head>
+
 <body>
 
-<!-- TOAST -->
-<div id="toast"></div>
+    <!-- TOAST NOTIFICATIONS -->
+    <div id="toast"></div>
 
-<script>
-function showToast(message, type = 'success') {
-    const toast = document.getElementById('toast');
-    toast.innerText = message;
-    toast.style.display = 'block';
-    toast.style.background = (type === 'success') ? '#16a34a' : '#dc2626';
-    setTimeout(() => { toast.style.display = 'none'; }, 3500);
-}
-</script>
+    <script>
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.innerText = message;
+            toast.style.display = 'block';
+            toast.style.background = (type === 'success') ? '#51cf66' : '#ff6b6b';
+            setTimeout(() => {
+                toast.style.display = 'none';
+            }, 3500);
+        }
+    </script>
 
-@if(session('success'))
-<script>document.addEventListener('DOMContentLoaded', () => showToast("{{ session('success') }}", 'success'));</script>
-@endif
+    @if(session('success'))
+        <script>
+            document.addEventListener('DOMContentLoaded', () => showToast("{{ session('success') }}", 'success'));
+        </script>
+    @endif
 
-@if(session('error'))
-<script>document.addEventListener('DOMContentLoaded', () => showToast("{{ session('error') }}", 'error'));</script>
-@endif
+    @if(session('error'))
+        <script>
+            document.addEventListener('DOMContentLoaded', () => showToast("{{ session('error') }}", 'error'));
+        </script>
+    @endif
 
-<!-- CLEANED SIDEBAR - OLD EQUIPMENT SYSTEM REMOVED -->
+    <!-- CLEAN SIDEBAR - UNIFIED POS ONLY -->
+    <div class="sidebar">
+        <h2>🏨 Sea Eagle Resort</h2>
 
-<div class="sidebar">
-    <h2>🏨 Sea Eagle Resort Admin</h2>
+        <!-- MAIN -->
+        <div class="module-title">📊 Main</div>
+        <a href="/admin/dashboard">📊 Dashboard</a>
+        <a href="/admin/audit-log">📋 Audit Log</a>
 
-    <!-- MAIN -->
-    <div class="module-title">📊 Main</div>
-    <a href="/admin/dashboard">📊 Dashboard</a>
-    <a href="/admin/audit-log">📋 Audit Log</a>
+        <!-- STAFF & SETTINGS -->
+        <div class="module-title">👥 Staff & Settings</div>
+        <a href="/admin/staff">👥 Staff Management</a>
+        <a href="/admin/payments">💰 Payment Records</a>
+        <a href="/admin/payment-submit">💳 Submit Payment</a>
 
-    <!-- STAFF & SETTINGS -->
-    <div class="module-title">👥 Staff & Settings</div>
-    <a href="/admin/staff">👥 Staff Management</a>
-    <a href="/admin/payments">💰 Payment Records</a>
-    <a href="/admin/payment-submit">💳 Submit Payment</a>
+        <!-- ROOM MANAGEMENT -->
+        <div class="module-title">🏠 Room Management</div>
+        <a href="/admin/rooms">🏠 Rooms List</a>
+        <a href="/admin/categories">🏨 Room Categories</a>
+        <a href="/admin/rooms/create">➕ Add / Edit Room</a>
 
-    <!-- ROOM MANAGEMENT -->
-    <div class="module-title">🏠 Room Management</div>
-    <a href="/admin/rooms">🏠 Rooms List</a>
-    <a href="/admin/categories">🏨 Room Categories</a>
-    <a href="/admin/rooms/create">➕ Add / Edit Room</a>
+        <!-- BOOKINGS -->
+        <div class="module-title">📅 Bookings</div>
+        <a href="/admin/bookings">📅 All Bookings</a>
+        <a href="/admin/booking-calendar">📅 Calendar View</a>
+        <a href="/admin/bookings/confirmed">🔵 Check-In</a>
+        <a href="/admin/bookings/checked-in">🔴 Check-Out</a>
 
-    <!-- STANDARD BOOKINGS -->
-    <div class="module-title">🛏️ Standard Bookings</div>
-    <a href="/admin/bookings/create">➕ New Booking (Walk-in)</a>
-    <a href="/admin/bookings">📅 All Bookings</a>
-    <a href="/admin/booking-calendar">📅 Booking Calendar</a>
+        <!-- ========== ⭐ UNIFIED WALK-IN POS ⭐ ========== -->
+        <div class="module-title pos-section">
+            🧾 WALK-IN POS SYSTEM
+        </div>
+        <a href="/admin/walkin/pos" class="pos-link">➕ New Transaction</a>
+        <a href="/admin/walkin/transactions" class="pos-link">📋 History</a>
 
-    <!-- GUEST OPERATIONS -->
-    <div class="module-title">🚪 Guest Operations</div>
-    <a href="/admin/bookings/confirmed">🔵 Check-In Guest</a>
-    <a href="/admin/bookings/checked-in">🔴 Check-Out Guest</a>
+        <!-- MANAGE INVENTORY -->
+        <div class="module-title">📦 Manage Inventory</div>
+        <a href="/admin/day-tour-packages">🏷️ Day Tour Packages</a>
+        <a href="/admin/cottages">🏡 Cottages</a>
+        <a href="/admin/equipment-types">🧰 Equipment</a>
 
-    <!-- ========== UNIFIED WALK-IN POS (NEW) ========== -->
-    <div class="module-title" style="background:#38bdf8;color:white;padding:8px 14px;border-radius:6px;margin:16px 0;">
-        🧾 WALK-IN POS SYSTEM (UNIFIED)
+        <!-- REPORTS -->
+        <div class="module-title">📊 Reports</div>
+        <a href="/admin/daily-summary">📈 Daily Summary</a>
+        <a href="/admin/revenue-report">💰 Revenue Report</a>
+
+        <!-- ACCOUNT -->
+        <div class="module-title">⚙️ Account</div>
+        <form method="GET" action="/admin/logout" style="margin: 0;">
+            <button class="logout-btn" onclick="return confirm('Logout now?')">🚪 Logout</button>
+        </form>
     </div>
-    <a href="/admin/walkin/pos" style="color:#38bdf8;font-weight:600;font-size:14px;">➕ New Transaction</a>
-    <a href="/admin/walkin/transactions" style="color:#38bdf8;">📋 Transaction History</a>
 
-    <!-- DAY TOUR PACKAGES MANAGEMENT -->
-    <div class="module-title">🌴 Day Tour Packages</div>
-    <a href="/admin/day-tour-packages">🏷 Manage Packages</a>
+    <!-- MAIN CONTENT -->
+    <div class="main">
+        @yield('content')
+    </div>
 
-    <!-- COTTAGE MANAGEMENT -->
-    <div class="module-title">🏡 Cottage Management</div>
-    <a href="/admin/cottages">🏠 Cottages</a>
-
-    <!-- EQUIPMENT TYPES MANAGEMENT -->
-    <div class="module-title">🧰 Equipment Types</div>
-    <a href="/admin/equipment-types">⚙️ Manage Equipment</a>
-
-    <!-- REPORTS -->
-    <div class="module-title">📊 Reports</div>
-    <a href="/admin/daily-summary">📈 Daily Summary</a>
-    <a href="/admin/revenue-report">💰 Revenue Report</a>
-
-    <!-- ACCOUNT -->
-    <div class="module-title">⚙️ Account</div>
-    <form method="GET" action="/admin/logout" style="margin:0;">
-        <button class="logout-btn" onclick="return confirm('Logout now?')">🚪 Logout</button>
-    </form>
-</div>
-
-<style>
-.sidebar {
-    padding: 20px 0;
-}
-
-.module-title {
-    font-size: 11px;
-    font-weight: 700;
-    color: #666;
-    padding: 12px 14px;
-    margin: 20px 0 8px 0;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border-bottom: 1px solid #e0e0e0;
-}
-
-.sidebar a {
-    display: block;
-    padding: 10px 14px;
-    color: #333;
-    text-decoration: none;
-    font-size: 13px;
-    border-left: 3px solid transparent;
-    transition: all 0.2s;
-}
-
-.sidebar a:hover {
-    background: #f5f5f5;
-    border-left-color: #0a4a6e;
-    color: #0a4a6e;
-}
-
-.sidebar a[href*="walkin"] {
-    color: #38bdf8;
-    font-weight: 500;
-}
-
-.sidebar a[href*="walkin"]:hover {
-    background: #e0f7ff;
-}
-
-.logout-btn {
-    width: 100%;
-    padding: 10px 14px;
-    background: #c0392b;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    font-size: 13px;
-    cursor: pointer;
-    text-align: left;
-    font-weight: 600;
-    transition: 0.2s;
-}
-
-.logout-btn:hover {
-    background: #a93226;
-}
-</style>
-
-<style>
-.sidebar {
-    padding: 20px 0;
-}
-
-.module-title {
-    font-size: 11px;
-    font-weight: 700;
-    color: #666;
-    padding: 12px 14px;
-    margin: 20px 0 8px 0;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border-bottom: 1px solid #e0e0e0;
-}
-
-.sidebar a {
-    display: block;
-    padding: 10px 14px;
-    color: #333;
-    text-decoration: none;
-    font-size: 13px;
-    border-left: 3px solid transparent;
-    transition: all 0.2s;
-}
-
-.sidebar a:hover {
-    background: #f5f5f5;
-    border-left-color: #0a4a6e;
-    color: #0a4a6e;
-}
-
-.sidebar a[href*="walkin"] {
-    color: #38bdf8;
-    font-weight: 500;
-}
-
-.sidebar a[href*="walkin"]:hover {
-    background: #e0f7ff;
-}
-
-.logout-btn {
-    width: 100%;
-    padding: 10px 14px;
-    background: #c0392b;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    font-size: 13px;
-    cursor: pointer;
-    text-align: left;
-    font-weight: 600;
-    transition: 0.2s;
-}
-
-.logout-btn:hover {
-    background: #a93226;
-}
-</style>
-
-<style>
-.sidebar {
-    padding: 20px 0;
-}
-
-.module-title {
-    font-size: 11px;
-    font-weight: 700;
-    color: #666;
-    padding: 12px 14px;
-    margin: 20px 0 8px 0;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border-bottom: 1px solid #e0e0e0;
-}
-
-.sidebar a {
-    display: block;
-    padding: 10px 14px;
-    color: #333;
-    text-decoration: none;
-    font-size: 13px;
-    border-left: 3px solid transparent;
-    transition: all 0.2s;
-}
-
-.sidebar a:hover {
-    background: #f5f5f5;
-    border-left-color: #0a4a6e;
-    color: #0a4a6e;
-}
-
-.sidebar a[href*="walkin"] {
-    color: #38bdf8;
-    font-weight: 500;
-}
-
-.sidebar a[href*="walkin"]:hover {
-    background: #e0f7ff;
-}
-
-.logout-btn {
-    width: 100%;
-    padding: 10px 14px;
-    background: #c0392b;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    font-size: 13px;
-    cursor: pointer;
-    text-align: left;
-    font-weight: 600;
-    transition: 0.2s;
-}
-
-.logout-btn:hover {
-    background: #a93226;
-}
-</style>
-
-
-<!-- MAIN CONTENT -->
-<div class="main">
-    @yield('content')
-</div>
-
-{{-- FIX: FullCalendar JS loaded once here at the bottom --}}
-<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js"></script>
+    <!-- FULLCALENDAR JS -->
+    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js"></script>
 
 </body>
+
 </html>
